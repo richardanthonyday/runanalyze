@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
+import 'package:intl/intl.dart';
 import 'models/activity.dart';
 import 'services/runalyze_client.dart';
 import 'services/activity_service.dart';
+import 'utils/activity_grouper.dart';
 
 void main() {
   runApp(const RunAnalyzeApp());
@@ -79,6 +81,17 @@ class _DashboardPageState extends State<DashboardPage> {
     return _activityService.filterByDays(_activities, days);
   }
 
+  List<ActivityGroup> _getGroups() {
+    final filtered = _filtered();
+    if (_timeframe == Timeframe.week) {
+      return ActivityGrouper.groupByWeek(filtered);
+    } else if (_timeframe == Timeframe.month) {
+      return ActivityGrouper.groupByMonth(filtered);
+    } else {
+      return ActivityGrouper.groupByYear(filtered);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -117,6 +130,7 @@ class _DashboardPageState extends State<DashboardPage> {
     final totalDist = _activityService.totalDistance(filtered);
     final totalDur = _activityService.totalDuration(filtered);
     final avgPace = _activityService.averagePace(filtered);
+    final groups = _getGroups();
 
     return Scaffold(
       appBar: AppBar(
@@ -190,24 +204,15 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
             const SizedBox(height: 12),
 
-            // Activity list
+            // Grouped activity list
             Expanded(
               child: Card(
                 child: filtered.isEmpty
                     ? const Center(child: Text('No activities found'))
                     : ListView.builder(
-                        itemCount: filtered.length,
+                        itemCount: groups.length,
                         itemBuilder: (context, idx) {
-                          final a = filtered[idx];
-                          return ListTile(
-                            title: Text(
-                              '${a.sport}${a.type != null ? ' • ${a.type}' : ''} • ${a.distance.toStringAsFixed(1)} km',
-                            ),
-                            subtitle: Text(
-                              '${a.dateTime.toLocal().toIso8601String().split('T').first} • ${a.formatDuration()}',
-                            ),
-                            trailing: Text(a.formatPace()),
-                          );
+                          return _GroupCard(group: groups[idx]);
                         },
                       ),
               ),
@@ -215,6 +220,84 @@ class _DashboardPageState extends State<DashboardPage> {
           ],
         ),
       ),
+    );
+  }
+
+  String _formatDuration(int seconds) {
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    if (hours > 0) {
+      return '${hours}h ${minutes}m';
+    }
+    return '${minutes}m';
+  }
+}
+
+class _GroupCard extends StatefulWidget {
+  final ActivityGroup group;
+
+  const _GroupCard({
+    Key? key,
+    required this.group,
+  }) : super(key: key);
+
+  @override
+  State<_GroupCard> createState() => _GroupCardState();
+}
+
+class _GroupCardState extends State<_GroupCard> {
+  bool _expanded = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        ListTile(
+          title: Text(
+            widget.group.label,
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          subtitle: Text(
+            '${widget.group.count} activities • ${widget.group.totalDistance.toStringAsFixed(1)} km • ${_formatDuration(widget.group.totalDuration)}',
+            style: const TextStyle(fontSize: 12),
+          ),
+          trailing: Icon(
+            _expanded ? Icons.expand_less : Icons.expand_more,
+          ),
+          onTap: () => setState(() => _expanded = !_expanded),
+        ),
+        if (_expanded)
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: widget.group.activities.length,
+            itemBuilder: (context, idx) {
+              final activity = widget.group.activities[idx];
+              return Padding(
+                padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 4, bottom: 4),
+                child: Card(
+                  child: ListTile(
+                    dense: true,
+                    title: Text(
+                      '${activity.sport}${activity.type != null ? ' • ${activity.type}' : ''} • ${activity.distance.toStringAsFixed(1)} km',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                    subtitle: Text(
+                      '${DateFormat('MMM d, EEE').format(activity.dateTime)} • ${activity.formatDuration()}',
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    trailing: Text(
+                      activity.formatPace(),
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ),
+                ),
+              );
+            },
+          )
+        else
+          const Divider(),
+      ],
     );
   }
 
