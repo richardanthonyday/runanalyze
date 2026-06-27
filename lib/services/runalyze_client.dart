@@ -25,13 +25,14 @@ class RunalyzeClient {
     int page = 1,
   }) async {
     try {
-      final uri = Uri.parse('$baseUrl/activity')
-          .replace(queryParameters: {
-        'preset': 'latest',
-        'page': page.toString(),
-        'itemsPerPage': itemsPerPage.toString(),
-        'order[id]': 'asc',
-      });
+      final uri = Uri.parse('$baseUrl/activity').replace(
+        queryParameters: {
+          'page': page.toString(),
+          'itemsPerPage': itemsPerPage.toString(),
+          'pagination': 'true',
+          'order[id]': 'desc', // newest first
+        },
+      );
 
       final response = await httpClient.get(
         uri,
