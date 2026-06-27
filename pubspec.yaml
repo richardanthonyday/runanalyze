@@ -1,0 +1,14 @@
+name: runanalyze_mobile
+description: Minimal Flutter app to show weekly/monthly/annual activity stats
+publish_to: 'none'
+version: 0.1.0
+environment:
+  sdk: ">=2.18.0 <4.0.0"
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.2
+  fl_chart: ^0.60.0
+
+flutter:
+  uses-material-design: true
