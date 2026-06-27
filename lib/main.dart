@@ -25,9 +25,8 @@ class Activity {
   final String type;
   final double distanceKm;
   final int durationSec;
-  final int elevationGain;
 
-  Activity({required this.id, required this.date, required this.type, required this.distanceKm, required this.durationSec, required this.elevationGain});
+  Activity({required this.id, required this.date, required this.type, required this.distanceKm, required this.durationSec});
 }
 
 // Mock data generator
@@ -42,7 +41,6 @@ List<Activity> mockActivities() {
       type: i % 5 == 0 ? 'ride' : 'run',
       distanceKm: (5 + (i % 6)) + (i % 3) * 0.2,
       durationSec: 30 * 60 + (i % 60) * 10,
-      elevationGain: (i % 100) + 10,
     ));
   }
   return list;
@@ -75,7 +73,6 @@ class _DashboardPageState extends State<DashboardPage> {
 
   double _totalDistance(List<Activity> list) => list.fold(0.0, (p, e) => p + e.distanceKm);
   int _totalDuration(List<Activity> list) => list.fold(0, (p, e) => p + e.durationSec);
-  int _totalElevation(List<Activity> list) => list.fold(0, (p, e) => p + e.elevationGain);
 
   String _formatDuration(int seconds) {
     final hours = seconds ~/ 3600;
@@ -88,7 +85,6 @@ class _DashboardPageState extends State<DashboardPage> {
     final filtered = _filtered();
     final totalDist = _totalDistance(filtered);
     final totalDur = _totalDuration(filtered);
-    final totalElev = _totalElevation(filtered);
     final avgPace = totalDist > 0 ? (totalDur / 60) / totalDist : 0; // min per km
 
     return Scaffold(
@@ -112,7 +108,7 @@ class _DashboardPageState extends State<DashboardPage> {
               children: [
                 _SummaryCard(title: 'Distance', value: '${totalDist.toStringAsFixed(1)} km'),
                 _SummaryCard(title: 'Duration', value: _formatDuration(totalDur)),
-                _SummaryCard(title: 'Elevation', value: '${totalElev} m'),
+                _SummaryCard(title: 'Avg Pace', value: '${avgPace.toStringAsFixed(1)} min/km'),
               ],
             ),
             SizedBox(height: 12),
