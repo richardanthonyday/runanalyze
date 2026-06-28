@@ -147,12 +147,30 @@ class _ApiProbePageState extends State<ApiProbePage> {
     }
   }
 
+  void _backToApp() {
+    if (Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
+      return;
+    }
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute<void>(
+        builder: (_) => const DashboardPage(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('API Probe'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.home),
+            tooltip: 'Back to app',
+            onPressed: _backToApp,
+          ),
           IconButton(
             icon: const Icon(Icons.terminal),
             tooltip: 'Dump probe to console',
@@ -291,19 +309,11 @@ class _ApiProbePageState extends State<ApiProbePage> {
                               ),
                             ),
                           ],
-                          if (kApiProbeMode) ...[
-                            const SizedBox(height: 16),
-                            ElevatedButton(
-                              onPressed: () {
-                                Navigator.of(context).push(
-                                  MaterialPageRoute<void>(
-                                    builder: (_) => const DashboardPage(),
-                                  ),
-                                );
-                              },
-                              child: const Text('Open Dashboard'),
-                            ),
-                          ],
+                          const SizedBox(height: 16),
+                          ElevatedButton(
+                            onPressed: _backToApp,
+                            child: const Text('Back to App'),
+                          ),
                         ],
                       ),
                     ),
@@ -422,7 +432,7 @@ class _DashboardPageState extends State<DashboardPage> {
     DistanceUnit tempUnit = _distanceUnit;
     int tempRecordsPerPage = _recordsPerPage;
 
-    final applied = await showDialog<bool>(
+    final action = await showDialog<String>(
       context: context,
       builder: (context) {
         return StatefulBuilder(
@@ -489,16 +499,25 @@ class _DashboardPageState extends State<DashboardPage> {
                         setLocalState(() => tempRecordsPerPage = value);
                       },
                     ),
+                    const SizedBox(height: 8),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => Navigator.of(context).pop('probe'),
+                        icon: const Icon(Icons.bug_report),
+                        label: const Text('Open API Probe'),
+                      ),
+                    ),
                   ],
                 ),
               ),
               actions: [
                 TextButton(
-                  onPressed: () => Navigator.of(context).pop(false),
+                  onPressed: () => Navigator.of(context).pop('cancel'),
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  onPressed: () => Navigator.of(context).pop(true),
+                  onPressed: () => Navigator.of(context).pop('apply'),
                   child: const Text('Apply'),
                 ),
               ],
@@ -508,7 +527,17 @@ class _DashboardPageState extends State<DashboardPage> {
       },
     );
 
-    if (applied != true) return;
+    if (action == 'probe') {
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => const ApiProbePage(),
+        ),
+      );
+      return;
+    }
+
+    if (action != 'apply') return;
 
     final pagingChanged = tempRecordsPerPage != _recordsPerPage;
     setState(() {
@@ -549,6 +578,7 @@ class _DashboardPageState extends State<DashboardPage> {
     required DateTime cutoff,
     bool forceRefresh = true,
     bool appendMode = false,
+    int? loadedPeriodsOnSuccess,
   }) async {
     if (appendMode) {
       setState(() {
@@ -579,6 +609,9 @@ class _DashboardPageState extends State<DashboardPage> {
       setState(() {
         _activities = activities;
         _loadedNotBefore = cutoff;
+        if (loadedPeriodsOnSuccess != null) {
+          _loadedPeriods = loadedPeriodsOnSuccess;
+        }
         _loading = false;
         _loadingMore = false;
       });
@@ -628,13 +661,11 @@ class _DashboardPageState extends State<DashboardPage> {
     if (_loadedPeriods >= maxPeriods) return;
 
     final nextPeriods = (_loadedPeriods + 1).clamp(1, maxPeriods);
-    setState(() {
-      _loadedPeriods = nextPeriods;
-    });
     await _loadActivities(
       cutoff: _cutoffFor(_timeframe, periods: nextPeriods),
       forceRefresh: false,
       appendMode: true,
+      loadedPeriodsOnSuccess: nextPeriods,
     );
   }
 
@@ -658,6 +689,13 @@ class _DashboardPageState extends State<DashboardPage> {
       cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
       forceRefresh: true,
     );
+  }
+
+  void _goHomeFromError() {
+    setState(() {
+      _error = null;
+      _loading = false;
+    });
   }
 
   void _onScroll() {
@@ -799,11 +837,21 @@ class _DashboardPageState extends State<DashboardPage> {
                 style: const TextStyle(fontSize: 16),
               ),
               const SizedBox(height: 24),
-              ElevatedButton(
-                onPressed: () => _loadActivities(
-                  cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
-                ),
-                child: const Text('Retry'),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  ElevatedButton(
+                    onPressed: () => _loadActivities(
+                      cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+                    ),
+                    child: const Text('Retry'),
+                  ),
+                  const SizedBox(width: 12),
+                  OutlinedButton(
+                    onPressed: _goHomeFromError,
+                    child: const Text('Home'),
+                  ),
+                ],
               ),
             ],
           ),
@@ -818,16 +866,6 @@ class _DashboardPageState extends State<DashboardPage> {
       appBar: AppBar(
         title: const Text('RunAnalyze (Basic)'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.bug_report),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const ApiProbePage(),
-                ),
-              );
-            },
-          ),
           IconButton(
             icon: const Icon(Icons.settings),
             onPressed: _openSettingsDialog,
