@@ -324,6 +324,7 @@ class DashboardPage extends StatefulWidget {
 
 class _DashboardPageState extends State<DashboardPage> {
   static const String _recordsPerPageKey = 'records_per_page';
+  static const String _distanceUnitKey = 'distance_unit';
   Timeframe _timeframe = Timeframe.week;
   DistanceUnit _distanceUnit = DistanceUnit.km;
   String _sportFilter = 'Running';
@@ -334,7 +335,8 @@ class _DashboardPageState extends State<DashboardPage> {
   bool _loadingMore = false;
   String? _error;
   DateTime? _loadedNotBefore;
-  int _loadedPeriods = 4;
+  int _loadedPeriods = 1;
+  bool _queuedLoadMoreFromPlaceholder = false;
   final ScrollController _scrollController = ScrollController();
 
   static const double _kmToMiles = 0.621371;
@@ -357,10 +359,16 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _initAndLoad() async {
-    final saved = await _loadRecordsPerPagePreference();
-    if (saved != null && mounted) {
+    final savedRecords = await _loadRecordsPerPagePreference();
+    final savedUnit = await _loadDistanceUnitPreference();
+    if ((savedRecords != null || savedUnit != null) && mounted) {
       setState(() {
-        _recordsPerPage = saved;
+        if (savedRecords != null) {
+          _recordsPerPage = savedRecords;
+        }
+        if (savedUnit != null) {
+          _distanceUnit = savedUnit;
+        }
       });
     }
     if (!mounted) return;
@@ -385,6 +393,138 @@ class _DashboardPageState extends State<DashboardPage> {
       await prefs.setInt(_recordsPerPageKey, value);
     } catch (_) {
       // Non-fatal; keep running even if persistence is unavailable.
+    }
+  }
+
+  Future<DistanceUnit?> _loadDistanceUnitPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = prefs.getString(_distanceUnitKey);
+      if (value == null) return null;
+      if (value == 'km') return DistanceUnit.km;
+      if (value == 'mi') return DistanceUnit.mi;
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveDistanceUnitPreference(DistanceUnit value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_distanceUnitKey, value == DistanceUnit.km ? 'km' : 'mi');
+    } catch (_) {
+      // Non-fatal; keep running even if persistence is unavailable.
+    }
+  }
+
+  Future<void> _openSettingsDialog() async {
+    DistanceUnit tempUnit = _distanceUnit;
+    int tempRecordsPerPage = _recordsPerPage;
+
+    final applied = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setLocalState) {
+            return AlertDialog(
+              title: const Text('Settings'),
+              content: SizedBox(
+                width: 360,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Display',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<DistanceUnit>(
+                      value: tempUnit,
+                      decoration: const InputDecoration(
+                        labelText: 'Distance Unit',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: DistanceUnit.km,
+                          child: Text('Kilometers (km)'),
+                        ),
+                        DropdownMenuItem(
+                          value: DistanceUnit.mi,
+                          child: Text('Miles (mi)'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setLocalState(() => tempUnit = value);
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Advanced',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<int>(
+                      value: tempRecordsPerPage,
+                      decoration: const InputDecoration(
+                        labelText: 'API Paging',
+                        helperText: 'Records per API page request',
+                        isDense: true,
+                        border: OutlineInputBorder(),
+                      ),
+                      items: const [10, 25, 50]
+                          .map(
+                            (size) => DropdownMenuItem<int>(
+                              value: size,
+                              child: Text('$size records'),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setLocalState(() => tempRecordsPerPage = value);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  child: const Text('Apply'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (applied != true) return;
+
+    final pagingChanged = tempRecordsPerPage != _recordsPerPage;
+    setState(() {
+      _distanceUnit = tempUnit;
+      _recordsPerPage = tempRecordsPerPage;
+      if (pagingChanged) {
+        _loadedNotBefore = null;
+        _loadedPeriods = 1;
+      }
+    });
+
+    await _saveDistanceUnitPreference(tempUnit);
+    await _saveRecordsPerPagePreference(tempRecordsPerPage);
+
+    if (pagingChanged) {
+      await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
     }
   }
 
@@ -472,22 +612,51 @@ class _DashboardPageState extends State<DashboardPage> {
     if (_timeframe == timeframe) return;
     setState(() {
       _timeframe = timeframe;
-      _loadedPeriods = 4;
+      _loadedPeriods = 1;
       _loadedNotBefore = null;
     });
-    await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
+    await _loadActivities(
+      cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+      forceRefresh: false,
+    );
   }
 
   Future<void> _loadMorePeriods() async {
     if (_loading || _loadingMore) return;
 
-    final nextPeriods = _loadedPeriods + 4;
+    final maxPeriods = _maxPeriodsFor(_timeframe);
+    if (_loadedPeriods >= maxPeriods) return;
+
+    final nextPeriods = (_loadedPeriods + 1).clamp(1, maxPeriods);
     setState(() {
       _loadedPeriods = nextPeriods;
     });
     await _loadActivities(
       cutoff: _cutoffFor(_timeframe, periods: nextPeriods),
+      forceRefresh: false,
       appendMode: true,
+    );
+  }
+
+  Future<void> _fullRefresh() async {
+    setState(() {
+      _loadedNotBefore = null;
+      _loadedPeriods = 1;
+      _error = null;
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Cache cleared, reloading from page 1...'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+
+    await _loadActivities(
+      cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+      forceRefresh: true,
     );
   }
 
@@ -497,6 +666,27 @@ class _DashboardPageState extends State<DashboardPage> {
     if (position.pixels >= position.maxScrollExtent - 180) {
       _loadMorePeriods();
     }
+  }
+
+  int _maxPeriodsFor(Timeframe timeframe) {
+    if (timeframe == Timeframe.week) return 52;
+    if (timeframe == Timeframe.month) return 24;
+    return 10;
+  }
+
+  bool _hasMorePeriods() {
+    return _loadedPeriods < _maxPeriodsFor(_timeframe);
+  }
+
+  DateTime _nextPeriodStart() {
+    final currentCutoff = _cutoffFor(_timeframe, periods: _loadedPeriods);
+    if (_timeframe == Timeframe.week) {
+      return currentCutoff.subtract(const Duration(days: 7));
+    }
+    if (_timeframe == Timeframe.month) {
+      return DateTime(currentCutoff.year, currentCutoff.month - 1, 1);
+    }
+    return DateTime(currentCutoff.year - 1, 1, 1);
   }
 
   List<Activity> _filtered() {
@@ -523,13 +713,66 @@ class _DashboardPageState extends State<DashboardPage> {
 
   List<ActivityGroup> _getGroups() {
     final filtered = _filtered();
+    List<ActivityGroup> groups;
     if (_timeframe == Timeframe.week) {
-      return ActivityGrouper.groupByWeek(filtered);
+      groups = ActivityGrouper.groupByWeek(filtered);
     } else if (_timeframe == Timeframe.month) {
-      return ActivityGrouper.groupByMonth(filtered);
+      groups = ActivityGrouper.groupByMonth(filtered);
     } else {
-      return ActivityGrouper.groupByYear(filtered);
+      groups = ActivityGrouper.groupByYear(filtered);
     }
+
+    final byStart = <String, ActivityGroup>{
+      for (final g in groups) _periodKey(g.startDate): g,
+    };
+
+    for (final start in _expectedPeriodStarts()) {
+      final key = _periodKey(start);
+      byStart.putIfAbsent(
+        key,
+        () => ActivityGroup(
+          label: _periodLabel(start),
+          activities: const [],
+          startDate: start,
+        ),
+      );
+    }
+
+    final merged = byStart.values.toList()
+      ..sort((a, b) => b.startDate.compareTo(a.startDate));
+    return merged;
+  }
+
+  String _periodKey(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  List<DateTime> _expectedPeriodStarts() {
+    final now = DateTime.now();
+    final starts = <DateTime>[];
+    final current = _cutoffFor(_timeframe);
+
+    for (int i = 0; i < _loadedPeriods; i++) {
+      if (_timeframe == Timeframe.week) {
+        starts.add(current.subtract(Duration(days: i * 7)));
+      } else if (_timeframe == Timeframe.month) {
+        starts.add(DateTime(now.year, now.month - i, 1));
+      } else {
+        starts.add(DateTime(now.year - i, 1, 1));
+      }
+    }
+    return starts;
+  }
+
+  String _periodLabel(DateTime start) {
+    if (_timeframe == Timeframe.week) {
+      final end = start.add(const Duration(days: 6));
+      return 'Week ${DateFormat('MMM d').format(start)} - ${DateFormat('MMM d, yyyy').format(end)}';
+    }
+    if (_timeframe == Timeframe.month) {
+      return DateFormat('MMMM yyyy').format(start);
+    }
+    return DateFormat('yyyy').format(start);
   }
 
   @override
@@ -586,10 +829,13 @@ class _DashboardPageState extends State<DashboardPage> {
             },
           ),
           IconButton(
+            icon: const Icon(Icons.settings),
+            onPressed: _openSettingsDialog,
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => _loadActivities(
-              cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
-            ),
+            tooltip: 'Full refresh',
+            onPressed: _fullRefresh,
           ),
         ],
       ),
@@ -647,60 +893,6 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                const Text('Records/page:'),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: DropdownButtonFormField<int>(
-                    value: _recordsPerPage,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      isDense: true,
-                      border: OutlineInputBorder(),
-                    ),
-                    items: const [10, 25, 50]
-                        .map(
-                          (size) => DropdownMenuItem<int>(
-                            value: size,
-                            child: Text('$size'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) async {
-                      if (value == null || value == _recordsPerPage) return;
-                      setState(() {
-                        _recordsPerPage = value;
-                        _loadedNotBefore = null;
-                        _loadedPeriods = 4;
-                      });
-                      await _saveRecordsPerPagePreference(value);
-                      await _loadActivities(
-                        cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ChoiceChip(
-                  label: const Text('km'),
-                  selected: _distanceUnit == DistanceUnit.km,
-                  onSelected: (_) => setState(() => _distanceUnit = DistanceUnit.km),
-                ),
-                const SizedBox(width: 8),
-                ChoiceChip(
-                  label: const Text('mi'),
-                  selected: _distanceUnit == DistanceUnit.mi,
-                  onSelected: (_) => setState(() => _distanceUnit = DistanceUnit.mi),
-                ),
-              ],
-            ),
             const SizedBox(height: 12),
 
             // Grouped infinite activity list
@@ -745,16 +937,63 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                     const Divider(height: 1),
                     Expanded(
-                      child: filtered.isEmpty
+                      child: groups.isEmpty
                           ? const Center(child: Text('No activities found'))
                           : ListView.builder(
                               controller: _scrollController,
-                              itemCount: groups.length + (_loadingMore ? 1 : 0),
+                              itemCount: groups.length + (_hasMorePeriods() ? 1 : 0),
                               itemBuilder: (context, idx) {
-                                if (idx >= groups.length) {
-                                  return const Padding(
-                                    padding: EdgeInsets.all(16.0),
-                                    child: Center(child: CircularProgressIndicator()),
+                                if (idx == groups.length && _hasMorePeriods()) {
+                                  if (!_loadingMore && !_queuedLoadMoreFromPlaceholder) {
+                                    _queuedLoadMoreFromPlaceholder = true;
+                                    WidgetsBinding.instance.addPostFrameCallback((_) async {
+                                      if (!mounted) return;
+                                      await _loadMorePeriods();
+                                      _queuedLoadMoreFromPlaceholder = false;
+                                    });
+                                  }
+
+                                  return InkWell(
+                                    onTap: _loadingMore ? null : _loadMorePeriods,
+                                    child: Padding(
+                                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                                      child: Row(
+                                        children: [
+                                          Expanded(
+                                            flex: 4,
+                                            child: Text(
+                                              _periodLabel(_nextPeriodStart()),
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                color: Colors.grey,
+                                              ),
+                                            ),
+                                          ),
+                                          const Expanded(
+                                            flex: 3,
+                                            child: Text('...', style: TextStyle(color: Colors.grey)),
+                                          ),
+                                          const Expanded(
+                                            flex: 3,
+                                            child: Text('...', style: TextStyle(color: Colors.grey)),
+                                          ),
+                                          SizedBox(
+                                            width: 28,
+                                            child: _loadingMore
+                                                ? const SizedBox(
+                                                    width: 16,
+                                                    height: 16,
+                                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                                  )
+                                                : const Icon(
+                                                    Icons.hourglass_top,
+                                                    size: 16,
+                                                    color: Colors.grey,
+                                                  ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
                                   );
                                 }
                                 return _GroupCard(
@@ -830,9 +1069,11 @@ class _GroupCardState extends State<_GroupCard> {
   @override
   Widget build(BuildContext context) {
     final rangeLabel = _groupDateRangeLabel();
-    final distanceLabel =
-        '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
-    final paceLabel = _formatPace(widget.group.averagePace);
+    final isEmptyGroup = widget.group.activities.isEmpty;
+    final distanceLabel = isEmptyGroup
+      ? '0 ${_distanceLabel()}'
+      : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
+    final paceLabel = isEmptyGroup ? '0' : _formatPace(widget.group.averagePace);
 
     return Column(
       children: [
@@ -911,19 +1152,7 @@ class _GroupCardState extends State<_GroupCard> {
   }
 
   String _groupDateRangeLabel() {
-    if (widget.group.activities.isEmpty) {
-      return widget.group.label;
-    }
-
-    final dates = widget.group.activities.map((a) => a.dateTime).toList()..sort();
-    final start = dates.first;
-    final end = dates.last;
-    final sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
-
-    if (sameDay) {
-      return DateFormat('MMM d').format(start);
-    }
-    return '${DateFormat('MMM d').format(start)} - ${DateFormat('MMM d').format(end)}';
+    return widget.group.label;
   }
 
   String _formatDuration(int seconds) {

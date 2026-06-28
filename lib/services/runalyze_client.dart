@@ -33,6 +33,46 @@ class RunalyzeClient {
     http.Client? httpClient,
   }) : httpClient = httpClient ?? http.Client();
 
+  /// Fetch exactly one page of activities.
+  Future<List<Activity>> getActivitiesPage({
+    int itemsPerPage = 500,
+    int page = 1,
+  }) async {
+    final uri = Uri.parse('$baseUrl/activity').replace(
+      queryParameters: {
+        'page': page.toString(),
+        'itemsPerPage': itemsPerPage.toString(),
+        'pagination': 'true',
+        'order[id]': 'desc',
+      },
+    );
+
+    final response = await httpClient.get(
+      uri,
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $apiToken',
+      },
+    ).timeout(const Duration(seconds: 12));
+
+    if (response.statusCode == 200) {
+      final List<dynamic> json = jsonDecode(response.body);
+      return json
+          .map((item) => Activity.fromJson(item as Map<String, dynamic>))
+          .toList();
+    }
+
+    if (response.statusCode == 401) {
+      throw RunalyzeException('Authentication failed. Invalid or expired API token.');
+    }
+
+    if (response.statusCode == 429) {
+      throw RunalyzeException('Runalyze API rate limit reached. Please wait a minute and retry.');
+    }
+
+    throw RunalyzeException('Failed to fetch activities: ${response.statusCode}');
+  }
+
   /// Probe endpoint call for debugging.
   Future<RunalyzeApiProbeResult> probeActivityPage({
     int page = 1,
@@ -101,69 +141,31 @@ class RunalyzeClient {
       final cutoff = notBefore;
 
       while (currentPage < page + maxPages) {
-        final uri = Uri.parse('$baseUrl/activity').replace(
-          queryParameters: {
-            'page': currentPage.toString(),
-            'itemsPerPage': itemsPerPage.toString(),
-            'pagination': 'true',
-            'order[id]': 'desc', // newest first
-          },
+        final pageActivities = await getActivitiesPage(
+          itemsPerPage: itemsPerPage,
+          page: currentPage,
         );
 
-        final response = await httpClient.get(
-          uri,
-          headers: {
-            'Accept': 'application/json',
-            'Authorization': 'Bearer $apiToken',
-          },
-        ).timeout(const Duration(seconds: 12));
-
-        if (response.statusCode == 200) {
-          final lastPageHeader = response.headers['pagination-last-page'];
-          final lastPage = int.tryParse(lastPageHeader ?? '');
-          final List<dynamic> json = jsonDecode(response.body);
-          final pageActivities = json
-              .map((item) => Activity.fromJson(item as Map<String, dynamic>))
-              .toList();
-
-          if (cutoff == null) {
-            allActivities.addAll(pageActivities);
-          } else {
-            allActivities.addAll(
-              pageActivities.where((a) => !a.dateTime.isBefore(cutoff)),
-            );
-          }
-
-          if (cutoff != null &&
-              pageActivities.isNotEmpty &&
-              pageActivities.every((a) => a.dateTime.isBefore(cutoff))) {
-            break;
-          }
-
-          // Last page when fewer than requested items are returned.
-          if (pageActivities.length < itemsPerPage) {
-            break;
-          }
-
-          if (lastPage != null && currentPage >= lastPage) {
-            break;
-          }
-
-          currentPage++;
-          continue;
+        if (cutoff == null) {
+          allActivities.addAll(pageActivities);
+        } else {
+          allActivities.addAll(
+            pageActivities.where((a) => !a.dateTime.isBefore(cutoff)),
+          );
         }
 
-        if (response.statusCode == 401) {
-          throw RunalyzeException('Authentication failed. Invalid or expired API token.');
+        if (cutoff != null &&
+            pageActivities.isNotEmpty &&
+            pageActivities.every((a) => a.dateTime.isBefore(cutoff))) {
+          break;
         }
 
-        if (response.statusCode == 429) {
-          throw RunalyzeException('Runalyze API rate limit reached. Please wait a minute and retry.');
+        // Last page when fewer than requested items are returned.
+        if (pageActivities.length < itemsPerPage) {
+          break;
         }
 
-        throw RunalyzeException(
-          'Failed to fetch activities: ${response.statusCode}',
-        );
+        currentPage++;
       }
 
       return allActivities;

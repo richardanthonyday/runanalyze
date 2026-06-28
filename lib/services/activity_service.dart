@@ -7,6 +7,9 @@ class ActivityService {
   List<Activity>? _cachedActivities;
   DateTime? _cacheTime;
   static const Duration _cacheDuration = Duration(minutes: 10);
+  int _lastFetchedPage = 0;
+  int _cachedItemsPerPage = 0;
+  bool _reachedLastPage = false;
 
   ActivityService({required this.client});
 
@@ -18,18 +21,49 @@ class ActivityService {
     DateTime? notBefore,
     int itemsPerPage = 500,
   }) async {
-    if (!forceRefresh && _isValidCache) {
+    if (forceRefresh) {
+      _resetPageCache();
+    }
+
+    if (_cachedItemsPerPage != 0 && _cachedItemsPerPage != itemsPerPage) {
+      _resetPageCache();
+    }
+    _cachedItemsPerPage = itemsPerPage;
+
+    _cachedActivities ??= <Activity>[];
+
+    if (_coversCutoff(notBefore)) {
+      _cacheTime = DateTime.now();
       return _cachedActivities!;
     }
 
     try {
-      final activities = await client.getActivities(
-        notBefore: notBefore,
-        itemsPerPage: itemsPerPage,
-      );
-      _cachedActivities = activities;
+      while (!_coversCutoff(notBefore) && !_reachedLastPage) {
+        final nextPage = _lastFetchedPage + 1;
+        final pageActivities = await client.getActivitiesPage(
+          itemsPerPage: itemsPerPage,
+          page: nextPage,
+        );
+
+        if (pageActivities.isEmpty) {
+          _reachedLastPage = true;
+          break;
+        }
+
+        final existingIds = _cachedActivities!.map((a) => a.id).toSet();
+        _cachedActivities!.addAll(
+          pageActivities.where((a) => !existingIds.contains(a.id)),
+        );
+        _cachedActivities!.sort((a, b) => b.dateTime.compareTo(a.dateTime));
+
+        _lastFetchedPage = nextPage;
+        if (pageActivities.length < itemsPerPage) {
+          _reachedLastPage = true;
+        }
+      }
+
       _cacheTime = DateTime.now();
-      return activities;
+      return _cachedActivities!;
     } on RunalyzeException {
       if (forceRefresh) {
         rethrow;
@@ -70,8 +104,32 @@ class ActivityService {
 
   /// Clear cache (e.g., on logout or force refresh).
   void clearCache() {
+    _resetPageCache();
+  }
+
+  bool _coversCutoff(DateTime? cutoff) {
+    if (_cachedActivities == null || _cachedActivities!.isEmpty) {
+      return false;
+    }
+
+    if (cutoff == null) {
+      return true;
+    }
+
+    if (_reachedLastPage) {
+      return true;
+    }
+
+    final oldest = _cachedActivities!.last.dateTime;
+    return oldest.isBefore(cutoff) || oldest.isAtSameMomentAs(cutoff);
+  }
+
+  void _resetPageCache() {
     _cachedActivities = null;
     _cacheTime = null;
+    _lastFetchedPage = 0;
+    _cachedItemsPerPage = 0;
+    _reachedLastPage = false;
   }
 
   bool get _isValidCache =>
