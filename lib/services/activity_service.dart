@@ -11,19 +11,30 @@ class ActivityService {
   ActivityService({required this.client});
 
   /// Get activities, using cache if available and fresh.
-  /// 
+  ///
   /// Set [forceRefresh] to true to ignore cache.
-  Future<List<Activity>> getActivities({bool forceRefresh = false}) async {
+  Future<List<Activity>> getActivities({
+    bool forceRefresh = false,
+    DateTime? notBefore,
+    int itemsPerPage = 500,
+  }) async {
     if (!forceRefresh && _isValidCache) {
       return _cachedActivities!;
     }
 
     try {
-      final activities = await client.getActivities();
+      final activities = await client.getActivities(
+        notBefore: notBefore,
+        itemsPerPage: itemsPerPage,
+      );
       _cachedActivities = activities;
       _cacheTime = DateTime.now();
       return activities;
     } on RunalyzeException {
+      if (forceRefresh) {
+        rethrow;
+      }
+
       // If API fails and we have cached data, return it gracefully
       if (_cachedActivities != null) {
         return _cachedActivities!;

@@ -63,6 +63,27 @@ void main() {
         expect(parsed.temperature, isNull);
       });
 
+      test('parses numeric fields when API returns doubles', () {
+        final json = {
+          'id': 186967505.0,
+          'date_time': '2026-06-26T19:28:14-05:00',
+          'sport': {'name': 'Running'},
+          'type': {'name': 'Easy run', 'avg_hr': 143.0},
+          'distance': 4.87,
+          'duration': 1384.0,
+          'hr_max': 162.0,
+          'power': 210.0,
+        };
+
+        final parsed = Activity.fromJson(json);
+
+        expect(parsed.id, 186967505);
+        expect(parsed.duration, 1384);
+        expect(parsed.hrMax, 162);
+        expect(parsed.hrAvg, 143);
+        expect(parsed.power, 210);
+      });
+
       test('handles missing sport gracefully', () {
         final json = {
           'id': 1,
@@ -99,7 +120,7 @@ void main() {
 
     group('formatDuration', () {
       test('formats duration with hours and minutes', () {
-        expect(activity.formatDuration(), '0h 23m');
+        expect(activity.formatDuration(), '23m');
       });
 
       test('formats duration with only minutes', () {

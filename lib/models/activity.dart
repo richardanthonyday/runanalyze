@@ -32,18 +32,41 @@ class Activity {
 
   /// Parse Activity from Runalyze API JSON response.
   factory Activity.fromJson(Map<String, dynamic> json) {
+    int toInt(dynamic value, {int fallback = 0}) {
+      if (value == null) return fallback;
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse(value.toString()) ?? fallback;
+    }
+
+    int? toNullableInt(dynamic value) {
+      if (value == null) return null;
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse(value.toString());
+    }
+
+    double? toNullableDouble(dynamic value) {
+      if (value == null) return null;
+      if (value is num) return value.toDouble();
+      return double.tryParse(value.toString());
+    }
+
+    final sportJson = json['sport'];
+    final typeJson = json['type'];
+
     return Activity(
-      id: json['id'] as int,
-      dateTime: DateTime.parse(json['date_time'] as String),
-      sport: json['sport']?['name'] ?? 'Unknown',
-      type: json['type']?['name'],
-      distance: (json['distance'] as num?)?.toDouble() ?? 0.0,
-      duration: json['duration'] as int? ?? 0,
-      hrMax: json['hr_max'] as int?,
-      hrAvg: json['type']?['avg_hr'] as int?,
-      power: json['power'] as int?,
-      vo2Max: (json['vo2max_by_time'] as num?)?.toDouble(),
-      temperature: (json['temperature'] as num?)?.toDouble(),
+      id: toInt(json['id']),
+      dateTime: DateTime.parse(json['date_time'] as String).toLocal(),
+      sport: sportJson is Map ? (sportJson['name']?.toString() ?? 'Unknown') : 'Unknown',
+      type: typeJson is Map ? typeJson['name']?.toString() : null,
+      distance: toNullableDouble(json['distance']) ?? 0.0,
+      duration: toInt(json['duration']),
+      hrMax: toNullableInt(json['hr_max']),
+      hrAvg: typeJson is Map ? toNullableInt(typeJson['avg_hr']) : null,
+      power: toNullableInt(json['power']),
+      vo2Max: toNullableDouble(json['vo2max_by_time']),
+      temperature: toNullableDouble(json['temperature']),
       weather: json['weather_condition'] as String?,
       note: json['note'] as String?,
     );
@@ -66,5 +89,11 @@ class Activity {
   }
 
   /// Format pace as string.
-  String formatPace() => '${paceMinPerKm.toStringAsFixed(2)} min/km';
+  String formatPace() {
+    if (paceMinPerKm <= 0) return '--:-- min/km';
+    final totalSeconds = (paceMinPerKm * 60).round();
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    return '${minutes}:${seconds.toString().padLeft(2, '0')} min/km';
+  }
 }

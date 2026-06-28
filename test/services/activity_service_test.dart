@@ -120,13 +120,38 @@ void main() {
         );
         final activities1 = await activityService.getActivities();
 
-        // Second call fails
+        // Second call fails and non-forced request can fall back to cache
         mockHttpClient.setResponse(status: 500);
 
         // Should return cached data instead of throwing
-        final activities2 = await activityService.getActivities(forceRefresh: true);
+        final activities2 = await activityService.getActivities();
         
         expect(activities2.length, activities1.length);
+      });
+
+      test('force refresh surfaces API failure', () async {
+        final mockActivities = [
+          {
+            'id': 1,
+            'date_time': '2026-06-26T19:28:14-05:00',
+            'sport': {'name': 'Running'},
+            'distance': 5.0,
+            'duration': 1800,
+          },
+        ];
+
+        mockHttpClient.setResponse(
+          status: 200,
+          body: jsonEncode(mockActivities),
+        );
+        await activityService.getActivities();
+
+        mockHttpClient.setResponse(status: 500);
+
+        expect(
+          () => activityService.getActivities(forceRefresh: true),
+          throwsA(isA<RunalyzeException>()),
+        );
       });
     });
 

@@ -99,6 +99,45 @@ void main() {
         expect(activities, isEmpty);
       });
 
+      test('aggregates activities across multiple pages', () async {
+        final page1 = [
+          {
+            'id': 1,
+            'date_time': '2026-06-26T19:28:14-05:00',
+            'sport': {'id': 1, 'name': 'Running'},
+            'distance': 5.0,
+            'duration': 1800,
+          },
+          {
+            'id': 2,
+            'date_time': '2026-06-25T19:28:14-05:00',
+            'sport': {'id': 1, 'name': 'Running'},
+            'distance': 6.0,
+            'duration': 1900,
+          },
+        ];
+
+        final page2 = [
+          {
+            'id': 3,
+            'date_time': '2026-06-24T19:28:14-05:00',
+            'sport': {'id': 2, 'name': 'Cycling'},
+            'distance': 10.0,
+            'duration': 2100,
+          },
+        ];
+
+        mockHttpClient.setResponseQueue([
+          {'status': 200, 'body': jsonEncode(page1)},
+          {'status': 200, 'body': jsonEncode(page2)},
+        ]);
+
+        final activities = await client.getActivities(itemsPerPage: 2);
+
+        expect(activities.length, 3);
+        expect(mockHttpClient.getCallCount(), 2);
+      });
+
       test('handles network timeout', () async {
         mockHttpClient.setThrowOnRequest(true);
 

@@ -1,10 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'dart:convert';
 import 'models/activity.dart';
 import 'services/runalyze_client.dart';
 import 'services/activity_service.dart';
 import 'utils/activity_grouper.dart';
+
+const bool kApiProbeMode = bool.fromEnvironment(
+  'API_PROBE_MODE',
+  defaultValue: false,
+);
 
 void main() {
   runApp(const RunAnalyzeApp());
@@ -16,14 +23,297 @@ class RunAnalyzeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RunAnalyze (MVP)',
+      title: 'RunAnalyze (Basic)',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const DashboardPage(),
+      home: kApiProbeMode ? const ApiProbePage() : const DashboardPage(),
+    );
+  }
+}
+
+class ApiProbePage extends StatefulWidget {
+  const ApiProbePage({Key? key}) : super(key: key);
+
+  @override
+  State<ApiProbePage> createState() => _ApiProbePageState();
+}
+
+class _ApiProbePageState extends State<ApiProbePage> {
+  bool _loading = true;
+  RunalyzeApiProbeResult? _result;
+  String _probeMode = 'latest';
+  int _probeItemsPerPage = 1;
+  int _probeWindowDays = 7;
+
+  void _dumpProbeToConsole() {
+    final result = _result;
+    if (result == null) return;
+
+    final weekly = _probeMode == 'week-first-page'
+      ? _windowFilteredFromFirstPage(result.responseBody)
+        : null;
+
+    final payload = {
+      'probe_mode': _probeMode,
+      'probe_items_per_page': _probeItemsPerPage,
+      'probe_window_days': _probeWindowDays,
+      'duration_ms': result.durationMs,
+      'status': result.statusCode,
+      'error': result.error,
+      'request_url': result.requestUrl,
+      'request_headers': result.requestHeaders,
+      'response_headers': result.responseHeaders,
+      'response_body': result.responseBody,
+      'window_filtered_from_first_page': weekly,
+    };
+
+    final pretty = const JsonEncoder.withIndent('  ').convert(payload);
+    debugPrint('=== RUNANALYZE_API_PROBE_START ===');
+    for (final line in pretty.split('\n')) {
+      debugPrint(line);
+    }
+    debugPrint('=== RUNANALYZE_API_PROBE_END ===');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Probe dumped to Flutter console output')),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _runProbe();
+  }
+
+  Future<void> _runProbe() async {
+    setState(() {
+      _loading = true;
+      _result = null;
+    });
+
+    final client = RunalyzeClient(
+      apiToken: 'pt#fc0bc78894a497c647fc7208b08364fa',
+    );
+
+    final result = await client.probeActivityPage(
+      page: 1,
+      itemsPerPage: _probeItemsPerPage,
+    );
+
+    setState(() {
+      _loading = false;
+      _result = result;
+    });
+  }
+
+  Map<String, dynamic>? _windowFilteredFromFirstPage(String? body) {
+    if (body == null || body.isEmpty) return null;
+    final decoded = jsonDecode(body);
+    if (decoded is! List) return null;
+
+    final now = DateTime.now();
+    final windowStart = DateTime(now.year, now.month, now.day)
+        .subtract(Duration(days: _probeWindowDays - 1));
+
+    final weekly = decoded.whereType<Map>().where((item) {
+      final dtRaw = item['date_time'];
+      if (dtRaw is! String) return false;
+      final dt = DateTime.tryParse(dtRaw)?.toLocal();
+      if (dt == null) return false;
+      return !dt.isBefore(windowStart);
+    }).toList();
+
+    final totalKm = weekly.fold<double>(
+      0,
+      (sum, item) => sum + ((item['distance'] as num?)?.toDouble() ?? 0.0),
+    );
+
+    return {
+      'window_days': _probeWindowDays,
+      'window_start_local': windowStart.toIso8601String(),
+      'first_page_count': decoded.length,
+      'window_count_from_first_page': weekly.length,
+      'window_total_distance_km_from_first_page': totalKm,
+      'activities': weekly,
+    };
+  }
+
+  String _formatPretty(String? body) {
+    if (body == null || body.isEmpty) return '(empty)';
+    try {
+      final decoded = jsonDecode(body);
+      return const JsonEncoder.withIndent('  ').convert(decoded);
+    } catch (_) {
+      return body;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('API Probe'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.terminal),
+            tooltip: 'Dump probe to console',
+            onPressed: _loading ? null : _dumpProbeToConsole,
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.tune),
+            onSelected: (value) {
+              setState(() {
+                if (value.startsWith('mode:')) {
+                  _probeMode = value.substring(5);
+                  if (_probeMode == 'week-first-page' && _probeItemsPerPage == 1) {
+                    _probeItemsPerPage = 100;
+                  }
+                } else if (value.startsWith('size:')) {
+                  _probeItemsPerPage = int.tryParse(value.substring(5)) ?? _probeItemsPerPage;
+                } else if (value.startsWith('window:')) {
+                  _probeWindowDays = int.tryParse(value.substring(7)) ?? _probeWindowDays;
+                }
+              });
+              _runProbe();
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: 'mode:latest',
+                child: Text('Mode: Latest payload'),
+              ),
+              PopupMenuItem(
+                value: 'mode:week-first-page',
+                child: Text('Mode: Window-filter from first page'),
+              ),
+              PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'size:1',
+                child: Text('Size: 1 record'),
+              ),
+              PopupMenuItem(
+                value: 'size:25',
+                child: Text('Size: 25 records'),
+              ),
+              PopupMenuItem(
+                value: 'size:50',
+                child: Text('Size: 50 records'),
+              ),
+              PopupMenuItem(
+                value: 'size:100',
+                child: Text('Size: 100 records'),
+              ),
+              PopupMenuItem(
+                value: 'size:500',
+                child: Text('Size: 500 records'),
+              ),
+              PopupMenuItem(
+                value: 'size:1000',
+                child: Text('Size: 1000 records'),
+              ),
+              PopupMenuDivider(),
+              PopupMenuItem(
+                value: 'window:7',
+                child: Text('Window: last 7 days'),
+              ),
+              PopupMenuItem(
+                value: 'window:14',
+                child: Text('Window: last 14 days'),
+              ),
+            ],
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _runProbe,
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : Padding(
+              padding: const EdgeInsets.all(12),
+              child: _result == null
+                  ? const Text('No probe result available.')
+                  : SingleChildScrollView(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Probe mode: $_probeMode'),
+                          Text('Probe itemsPerPage: $_probeItemsPerPage'),
+                          Text('Probe window days: $_probeWindowDays'),
+                          Text('Duration: ${_result!.durationMs} ms'),
+                          Text('Status: ${_result!.statusCode ?? 'no response'}'),
+                          if (_result!.error != null)
+                            Text(
+                              'Error: ${_result!.error}',
+                              style: const TextStyle(color: Colors.red),
+                            ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Request URL',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          SelectableText(_result!.requestUrl),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Request Headers',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          SelectableText(const JsonEncoder.withIndent('  ')
+                              .convert(_result!.requestHeaders)),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Response Headers',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          SelectableText(const JsonEncoder.withIndent('  ')
+                              .convert(_result!.responseHeaders)),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Response Body',
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          SelectableText(_formatPretty(_result!.responseBody)),
+                          if (_probeMode == 'week-first-page') ...[
+                            const SizedBox(height: 12),
+                            Text(
+                              'Window Filtered Result (Last $_probeWindowDays Days, From First Page)',
+                              style: const TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                            SelectableText(
+                              _formatPretty(
+                                jsonEncode(
+                                  _windowFilteredFromFirstPage(
+                                        _result!.responseBody,
+                                      ) ??
+                                      {
+                                        'error': 'Could not parse response as a JSON list',
+                                      },
+                                ),
+                              ),
+                            ),
+                          ],
+                          if (kApiProbeMode) ...[
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: () {
+                                Navigator.of(context).push(
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => const DashboardPage(),
+                                  ),
+                                );
+                              },
+                              child: const Text('Open Dashboard'),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+            ),
     );
   }
 }
 
 enum Timeframe { week, month, year }
+enum DistanceUnit { km, mi }
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({Key? key}) : super(key: key);
@@ -33,11 +323,18 @@ class DashboardPage extends StatefulWidget {
 }
 
 class _DashboardPageState extends State<DashboardPage> {
+  static const String _recordsPerPageKey = 'records_per_page';
   Timeframe _timeframe = Timeframe.week;
+  DistanceUnit _distanceUnit = DistanceUnit.km;
+  String _sportFilter = 'Running';
+  int _recordsPerPage = 10;
   late ActivityService _activityService;
   List<Activity> _activities = [];
   bool _loading = true;
   String? _error;
+  DateTime? _loadedNotBefore;
+
+  static const double _kmToMiles = 0.621371;
 
   @override
   void initState() {
@@ -46,19 +343,81 @@ class _DashboardPageState extends State<DashboardPage> {
     final apiToken = 'pt#fc0bc78894a497c647fc7208b08364fa';
     final client = RunalyzeClient(apiToken: apiToken);
     _activityService = ActivityService(client: client);
-    _loadActivities();
+    _initAndLoad();
   }
 
-  Future<void> _loadActivities() async {
+  Future<void> _initAndLoad() async {
+    final saved = await _loadRecordsPerPagePreference();
+    if (saved != null && mounted) {
+      setState(() {
+        _recordsPerPage = saved;
+      });
+    }
+    if (!mounted) return;
+    await _loadActivities(cutoff: _cutoffFor(Timeframe.week));
+  }
+
+  Future<int?> _loadRecordsPerPagePreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = prefs.getInt(_recordsPerPageKey);
+      if (value == null) return null;
+      if (value != 10 && value != 25 && value != 50) return null;
+      return value;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveRecordsPerPagePreference(int value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_recordsPerPageKey, value);
+    } catch (_) {
+      // Non-fatal; keep running even if persistence is unavailable.
+    }
+  }
+
+  DateTime _cutoffFor(Timeframe timeframe) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+
+    if (timeframe == Timeframe.week) {
+      return today.subtract(Duration(days: today.weekday - DateTime.monday));
+    }
+    if (timeframe == Timeframe.month) {
+      return DateTime(now.year, now.month, 1);
+    }
+    return DateTime(now.year, 1, 1);
+  }
+
+  Future<void> _loadActivities({
+    required DateTime cutoff,
+    bool forceRefresh = true,
+  }) async {
     setState(() {
       _loading = true;
       _error = null;
     });
 
     try {
-      final activities = await _activityService.getActivities(forceRefresh: true);
+      final activities = await _activityService
+          .getActivities(
+        forceRefresh: forceRefresh,
+        notBefore: cutoff,
+        itemsPerPage: _recordsPerPage,
+      )
+          .timeout(
+        _timeoutForCutoff(cutoff),
+        onTimeout: () {
+          throw RunalyzeException(
+            'Refreshing activities took too long. Please wait a minute and retry.',
+          );
+        },
+      );
       setState(() {
         _activities = activities;
+        _loadedNotBefore = cutoff;
         _loading = false;
       });
     } on RunalyzeException catch (e) {
@@ -69,16 +428,53 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  List<Activity> _filtered() {
-    int days;
-    if (_timeframe == Timeframe.week) {
-      days = 7;
-    } else if (_timeframe == Timeframe.month) {
-      days = 30;
-    } else {
-      days = 365;
+  Duration _timeoutForCutoff(DateTime cutoff) {
+    final now = DateTime.now();
+    final weekStart = _cutoffFor(Timeframe.week);
+    final monthStart = _cutoffFor(Timeframe.month);
+
+    if (cutoff.isAtSameMomentAs(weekStart)) {
+      return const Duration(seconds: 30);
     }
-    return _activityService.filterByDays(_activities, days);
+    if (cutoff.isAtSameMomentAs(monthStart)) {
+      return const Duration(seconds: 60);
+    }
+    if (cutoff.year == now.year && cutoff.month == 1 && cutoff.day == 1) {
+      return const Duration(seconds: 90);
+    }
+    return const Duration(seconds: 40);
+  }
+
+  Future<void> _ensureCoverageForSelectedTimeframe() async {
+    final neededCutoff = _cutoffFor(_timeframe);
+    final loadedCutoff = _loadedNotBefore;
+
+    if (loadedCutoff == null || neededCutoff.isBefore(loadedCutoff)) {
+      await _loadActivities(cutoff: neededCutoff);
+    }
+  }
+
+  List<Activity> _filtered() {
+    final now = DateTime.now();
+    final start = _cutoffFor(_timeframe);
+
+    return _activities
+        .where((a) => !a.dateTime.isBefore(start) && !a.dateTime.isAfter(now))
+        .where((a) => _sportFilter == 'All' || a.sport == _sportFilter)
+        .toList();
+  }
+
+  List<String> _sportOptions() {
+    final sports = _activities
+        .map((a) => a.sport)
+        .where((s) => s.trim().isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
+    final options = <String>{'All', ...sports};
+    options.add('Running');
+    return options.toList();
   }
 
   List<ActivityGroup> _getGroups() {
@@ -96,14 +492,14 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('RunAnalyze (MVP)')),
+        appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('RunAnalyze (MVP)')),
+        appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -117,7 +513,7 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: _loadActivities,
+                onPressed: () => _loadActivities(cutoff: _cutoffFor(_timeframe)),
                 child: const Text('Retry'),
               ),
             ],
@@ -127,18 +523,28 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     final filtered = _filtered();
-    final totalDist = _activityService.totalDistance(filtered);
+    final totalDistKm = _activityService.totalDistance(filtered);
     final totalDur = _activityService.totalDuration(filtered);
-    final avgPace = _activityService.averagePace(filtered);
+    final avgPaceMinPerKm = _activityService.averagePace(filtered);
     final groups = _getGroups();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('RunAnalyze (MVP)'),
+        title: const Text('RunAnalyze (Basic)'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.bug_report),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => const ApiProbePage(),
+                ),
+              );
+            },
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: _loadActivities,
+            onPressed: () => _loadActivities(cutoff: _cutoffFor(_timeframe)),
           ),
         ],
       ),
@@ -153,20 +559,106 @@ class _DashboardPageState extends State<DashboardPage> {
                 ChoiceChip(
                   label: const Text('Week'),
                   selected: _timeframe == Timeframe.week,
-                  onSelected: (_) =>
-                      setState(() => _timeframe = Timeframe.week),
+                  onSelected: (_) async {
+                    setState(() => _timeframe = Timeframe.week);
+                    await _ensureCoverageForSelectedTimeframe();
+                  },
                 ),
                 ChoiceChip(
                   label: const Text('Month'),
                   selected: _timeframe == Timeframe.month,
-                  onSelected: (_) =>
-                      setState(() => _timeframe = Timeframe.month),
+                  onSelected: (_) async {
+                    setState(() => _timeframe = Timeframe.month);
+                    await _ensureCoverageForSelectedTimeframe();
+                  },
                 ),
                 ChoiceChip(
                   label: const Text('Year'),
                   selected: _timeframe == Timeframe.year,
-                  onSelected: (_) =>
-                      setState(() => _timeframe = Timeframe.year),
+                  onSelected: (_) async {
+                    setState(() => _timeframe = Timeframe.year);
+                    await _ensureCoverageForSelectedTimeframe();
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('Activity:'),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<String>(
+                    value: _sportFilter,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _sportOptions()
+                        .map(
+                          (sport) => DropdownMenuItem<String>(
+                            value: sport,
+                            child: Text(sport),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() => _sportFilter = value);
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('Records/page:'),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: DropdownButtonFormField<int>(
+                    value: _recordsPerPage,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      isDense: true,
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [10, 25, 50]
+                        .map(
+                          (size) => DropdownMenuItem<int>(
+                            value: size,
+                            child: Text('$size'),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) async {
+                      if (value == null || value == _recordsPerPage) return;
+                      setState(() {
+                        _recordsPerPage = value;
+                        _loadedNotBefore = null;
+                      });
+                      await _saveRecordsPerPagePreference(value);
+                      await _loadActivities(cutoff: _cutoffFor(_timeframe));
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ChoiceChip(
+                  label: const Text('km'),
+                  selected: _distanceUnit == DistanceUnit.km,
+                  onSelected: (_) => setState(() => _distanceUnit = DistanceUnit.km),
+                ),
+                const SizedBox(width: 8),
+                ChoiceChip(
+                  label: const Text('mi'),
+                  selected: _distanceUnit == DistanceUnit.mi,
+                  onSelected: (_) => setState(() => _distanceUnit = DistanceUnit.mi),
                 ),
               ],
             ),
@@ -178,7 +670,7 @@ class _DashboardPageState extends State<DashboardPage> {
               children: [
                 _SummaryCard(
                   title: 'Distance',
-                  value: '${totalDist.toStringAsFixed(1)} km',
+                  value: '${_distanceForUnit(totalDistKm).toStringAsFixed(1)} ${_distanceLabel()}',
                 ),
                 _SummaryCard(
                   title: 'Duration',
@@ -186,7 +678,7 @@ class _DashboardPageState extends State<DashboardPage> {
                 ),
                 _SummaryCard(
                   title: 'Avg Pace',
-                  value: '${avgPace.toStringAsFixed(2)} min/km',
+                  value: _formatPace(avgPaceMinPerKm),
                 ),
               ],
             ),
@@ -194,7 +686,10 @@ class _DashboardPageState extends State<DashboardPage> {
 
             // Chart
             if (filtered.isNotEmpty)
-              _MiniChart(activities: filtered)
+              _MiniChart(
+                activities: filtered,
+                distanceUnit: _distanceUnit,
+              )
             else
               const Card(
                 child: SizedBox(
@@ -212,7 +707,10 @@ class _DashboardPageState extends State<DashboardPage> {
                     : ListView.builder(
                         itemCount: groups.length,
                         itemBuilder: (context, idx) {
-                          return _GroupCard(group: groups[idx]);
+                          return _GroupCard(
+                            group: groups[idx],
+                            distanceUnit: _distanceUnit,
+                          );
                         },
                       ),
               ),
@@ -231,14 +729,41 @@ class _DashboardPageState extends State<DashboardPage> {
     }
     return '${minutes}m';
   }
+
+  double _distanceForUnit(double kilometers) {
+    return _distanceUnit == DistanceUnit.km ? kilometers : kilometers * _kmToMiles;
+  }
+
+  double _paceForUnit(double minPerKm) {
+    return _distanceUnit == DistanceUnit.km ? minPerKm : minPerKm / _kmToMiles;
+  }
+
+  String _distanceLabel() {
+    return _distanceUnit == DistanceUnit.km ? 'km' : 'mi';
+  }
+
+  String _formatPace(double minPerKm) {
+    final minPerUnit = _paceForUnit(minPerKm);
+    if (minPerUnit <= 0) {
+      return '--:-- min/${_distanceLabel()}';
+    }
+
+    final totalSeconds = (minPerUnit * 60).round();
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    final secondsPadded = seconds.toString().padLeft(2, '0');
+    return '${minutes}:${secondsPadded} min/${_distanceLabel()}';
+  }
 }
 
 class _GroupCard extends StatefulWidget {
   final ActivityGroup group;
+  final DistanceUnit distanceUnit;
 
   const _GroupCard({
     Key? key,
     required this.group,
+    required this.distanceUnit,
   }) : super(key: key);
 
   @override
@@ -247,6 +772,7 @@ class _GroupCard extends StatefulWidget {
 
 class _GroupCardState extends State<_GroupCard> {
   bool _expanded = true;
+  static const double _kmToMiles = 0.621371;
 
   @override
   Widget build(BuildContext context) {
@@ -258,7 +784,7 @@ class _GroupCardState extends State<_GroupCard> {
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
           subtitle: Text(
-            '${widget.group.count} activities • ${widget.group.totalDistance.toStringAsFixed(1)} km • ${_formatDuration(widget.group.totalDuration)}',
+            '${widget.group.count} activities • ${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()} • ${_formatDuration(widget.group.totalDuration)}',
             style: const TextStyle(fontSize: 12),
           ),
           trailing: Icon(
@@ -279,7 +805,7 @@ class _GroupCardState extends State<_GroupCard> {
                   child: ListTile(
                     dense: true,
                     title: Text(
-                      '${activity.sport}${activity.type != null ? ' • ${activity.type}' : ''} • ${activity.distance.toStringAsFixed(1)} km',
+                      '${activity.sport}${activity.type != null ? ' • ${activity.type}' : ''} • ${_distanceForUnit(activity.distance).toStringAsFixed(1)} ${_distanceLabel()}',
                       style: const TextStyle(fontSize: 14),
                     ),
                     subtitle: Text(
@@ -287,7 +813,7 @@ class _GroupCardState extends State<_GroupCard> {
                       style: const TextStyle(fontSize: 11),
                     ),
                     trailing: Text(
-                      activity.formatPace(),
+                      _formatPace(activity.paceMinPerKm),
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -308,6 +834,30 @@ class _GroupCardState extends State<_GroupCard> {
       return '${hours}h ${minutes}m';
     }
     return '${minutes}m';
+  }
+
+  double _distanceForUnit(double kilometers) {
+    return widget.distanceUnit == DistanceUnit.km ? kilometers : kilometers * _kmToMiles;
+  }
+
+  String _distanceLabel() {
+    return widget.distanceUnit == DistanceUnit.km ? 'km' : 'mi';
+  }
+
+  String _formatPace(double minPerKm) {
+    final minPerUnit = widget.distanceUnit == DistanceUnit.km
+        ? minPerKm
+        : minPerKm / _kmToMiles;
+
+    if (minPerUnit <= 0) {
+      return '--:-- min/${_distanceLabel()}';
+    }
+
+    final totalSeconds = (minPerUnit * 60).round();
+    final minutes = totalSeconds ~/ 60;
+    final seconds = totalSeconds % 60;
+    final secondsPadded = seconds.toString().padLeft(2, '0');
+    return '${minutes}:${secondsPadded} min/${_distanceLabel()}';
   }
 }
 
@@ -351,10 +901,13 @@ class _SummaryCard extends StatelessWidget {
 
 class _MiniChart extends StatelessWidget {
   final List<Activity> activities;
+  final DistanceUnit distanceUnit;
+  static const double _kmToMiles = 0.621371;
 
   const _MiniChart({
     Key? key,
     required this.activities,
+    required this.distanceUnit,
   }) : super(key: key);
 
   @override
@@ -370,7 +923,10 @@ class _MiniChart extends StatelessWidget {
 
     final spots = List.generate(
       entries.length,
-      (i) => FlSpot(i.toDouble(), entries[i].value),
+      (i) => FlSpot(
+        i.toDouble(),
+        _distanceForUnit(entries[i].value),
+      ),
     );
 
     if (spots.isEmpty) {
@@ -389,15 +945,15 @@ class _MiniChart extends StatelessWidget {
           padding: const EdgeInsets.all(8.0),
           child: LineChart(
             LineChartData(
-              gridData: const FlGridData(show: false),
-              titlesData: const FlTitlesData(show: false),
-              borderData: const FlBorderData(show: false),
+              gridData: FlGridData(show: false),
+              titlesData: FlTitlesData(show: false),
+              borderData: FlBorderData(show: false),
               lineBarsData: [
                 LineChartBarData(
                   spots: spots,
                   isCurved: true,
-                  dotData: const FlDotData(show: false),
-                  colors: const [Colors.blue],
+                  dotData: FlDotData(show: false),
+                  color: Colors.blue,
                 )
               ],
             ),
@@ -405,5 +961,9 @@ class _MiniChart extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  double _distanceForUnit(double kilometers) {
+    return distanceUnit == DistanceUnit.km ? kilometers : kilometers * _kmToMiles;
   }
 }
