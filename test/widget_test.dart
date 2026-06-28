@@ -6,6 +6,6 @@ void main() {
   testWidgets('app renders dashboard shell', (WidgetTester tester) async {
     await tester.pumpWidget(const RunAnalyzeApp());
 
-    expect(find.text('RunAnalyze (MVP)'), findsOneWidget);
+    expect(find.text('RunAnalyze (Basic)'), findsOneWidget);
   });
 }

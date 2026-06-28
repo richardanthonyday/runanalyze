@@ -331,8 +331,11 @@ class _DashboardPageState extends State<DashboardPage> {
   late ActivityService _activityService;
   List<Activity> _activities = [];
   bool _loading = true;
+  bool _loadingMore = false;
   String? _error;
   DateTime? _loadedNotBefore;
+  int _loadedPeriods = 4;
+  final ScrollController _scrollController = ScrollController();
 
   static const double _kmToMiles = 0.621371;
 
@@ -343,7 +346,14 @@ class _DashboardPageState extends State<DashboardPage> {
     final apiToken = 'pt#fc0bc78894a497c647fc7208b08364fa';
     final client = RunalyzeClient(apiToken: apiToken);
     _activityService = ActivityService(client: client);
+    _scrollController.addListener(_onScroll);
     _initAndLoad();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _initAndLoad() async {
@@ -354,7 +364,7 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     }
     if (!mounted) return;
-    await _loadActivities(cutoff: _cutoffFor(Timeframe.week));
+    await _loadActivities(cutoff: _cutoffFor(Timeframe.week, periods: _loadedPeriods));
   }
 
   Future<int?> _loadRecordsPerPagePreference() async {
@@ -378,27 +388,38 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  DateTime _cutoffFor(Timeframe timeframe) {
+  DateTime _cutoffFor(Timeframe timeframe, {int periods = 1}) {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
 
     if (timeframe == Timeframe.week) {
-      return today.subtract(Duration(days: today.weekday - DateTime.monday));
+      // Sunday-Saturday week boundaries.
+      final weekStart = today.subtract(Duration(days: today.weekday % 7));
+      return weekStart.subtract(Duration(days: (periods - 1) * 7));
     }
     if (timeframe == Timeframe.month) {
-      return DateTime(now.year, now.month, 1);
+      final monthStart = DateTime(now.year, now.month, 1);
+      return DateTime(monthStart.year, monthStart.month - (periods - 1), 1);
     }
-    return DateTime(now.year, 1, 1);
+    final yearStart = DateTime(now.year, 1, 1);
+    return DateTime(yearStart.year - (periods - 1), 1, 1);
   }
 
   Future<void> _loadActivities({
     required DateTime cutoff,
     bool forceRefresh = true,
+    bool appendMode = false,
   }) async {
-    setState(() {
-      _loading = true;
-      _error = null;
-    });
+    if (appendMode) {
+      setState(() {
+        _loadingMore = true;
+      });
+    } else {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
 
     try {
       final activities = await _activityService
@@ -419,11 +440,13 @@ class _DashboardPageState extends State<DashboardPage> {
         _activities = activities;
         _loadedNotBefore = cutoff;
         _loading = false;
+        _loadingMore = false;
       });
     } on RunalyzeException catch (e) {
       setState(() {
         _error = e.message;
         _loading = false;
+        _loadingMore = false;
       });
     }
   }
@@ -445,21 +468,42 @@ class _DashboardPageState extends State<DashboardPage> {
     return const Duration(seconds: 40);
   }
 
-  Future<void> _ensureCoverageForSelectedTimeframe() async {
-    final neededCutoff = _cutoffFor(_timeframe);
-    final loadedCutoff = _loadedNotBefore;
+  Future<void> _switchTimeframe(Timeframe timeframe) async {
+    if (_timeframe == timeframe) return;
+    setState(() {
+      _timeframe = timeframe;
+      _loadedPeriods = 4;
+      _loadedNotBefore = null;
+    });
+    await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
+  }
 
-    if (loadedCutoff == null || neededCutoff.isBefore(loadedCutoff)) {
-      await _loadActivities(cutoff: neededCutoff);
+  Future<void> _loadMorePeriods() async {
+    if (_loading || _loadingMore) return;
+
+    final nextPeriods = _loadedPeriods + 4;
+    setState(() {
+      _loadedPeriods = nextPeriods;
+    });
+    await _loadActivities(
+      cutoff: _cutoffFor(_timeframe, periods: nextPeriods),
+      appendMode: true,
+    );
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients || _loading || _loadingMore) return;
+    final position = _scrollController.position;
+    if (position.pixels >= position.maxScrollExtent - 180) {
+      _loadMorePeriods();
     }
   }
 
   List<Activity> _filtered() {
     final now = DateTime.now();
-    final start = _cutoffFor(_timeframe);
 
     return _activities
-        .where((a) => !a.dateTime.isBefore(start) && !a.dateTime.isAfter(now))
+      .where((a) => !a.dateTime.isAfter(now))
         .where((a) => _sportFilter == 'All' || a.sport == _sportFilter)
         .toList();
   }
@@ -513,7 +557,9 @@ class _DashboardPageState extends State<DashboardPage> {
               ),
               const SizedBox(height: 24),
               ElevatedButton(
-                onPressed: () => _loadActivities(cutoff: _cutoffFor(_timeframe)),
+                onPressed: () => _loadActivities(
+                  cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+                ),
                 child: const Text('Retry'),
               ),
             ],
@@ -523,9 +569,6 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     final filtered = _filtered();
-    final totalDistKm = _activityService.totalDistance(filtered);
-    final totalDur = _activityService.totalDuration(filtered);
-    final avgPaceMinPerKm = _activityService.averagePace(filtered);
     final groups = _getGroups();
 
     return Scaffold(
@@ -544,7 +587,9 @@ class _DashboardPageState extends State<DashboardPage> {
           ),
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => _loadActivities(cutoff: _cutoffFor(_timeframe)),
+            onPressed: () => _loadActivities(
+              cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+            ),
           ),
         ],
       ),
@@ -559,26 +604,17 @@ class _DashboardPageState extends State<DashboardPage> {
                 ChoiceChip(
                   label: const Text('Week'),
                   selected: _timeframe == Timeframe.week,
-                  onSelected: (_) async {
-                    setState(() => _timeframe = Timeframe.week);
-                    await _ensureCoverageForSelectedTimeframe();
-                  },
+                  onSelected: (_) => _switchTimeframe(Timeframe.week),
                 ),
                 ChoiceChip(
                   label: const Text('Month'),
                   selected: _timeframe == Timeframe.month,
-                  onSelected: (_) async {
-                    setState(() => _timeframe = Timeframe.month);
-                    await _ensureCoverageForSelectedTimeframe();
-                  },
+                  onSelected: (_) => _switchTimeframe(Timeframe.month),
                 ),
                 ChoiceChip(
                   label: const Text('Year'),
                   selected: _timeframe == Timeframe.year,
-                  onSelected: (_) async {
-                    setState(() => _timeframe = Timeframe.year);
-                    await _ensureCoverageForSelectedTimeframe();
-                  },
+                  onSelected: (_) => _switchTimeframe(Timeframe.year),
                 ),
               ],
             ),
@@ -637,9 +673,12 @@ class _DashboardPageState extends State<DashboardPage> {
                       setState(() {
                         _recordsPerPage = value;
                         _loadedNotBefore = null;
+                        _loadedPeriods = 4;
                       });
                       await _saveRecordsPerPagePreference(value);
-                      await _loadActivities(cutoff: _cutoffFor(_timeframe));
+                      await _loadActivities(
+                        cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+                      );
                     },
                   ),
                 ),
@@ -664,55 +703,69 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
             const SizedBox(height: 12),
 
-            // Summary cards
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                _SummaryCard(
-                  title: 'Distance',
-                  value: '${_distanceForUnit(totalDistKm).toStringAsFixed(1)} ${_distanceLabel()}',
-                ),
-                _SummaryCard(
-                  title: 'Duration',
-                  value: _formatDuration(totalDur),
-                ),
-                _SummaryCard(
-                  title: 'Avg Pace',
-                  value: _formatPace(avgPaceMinPerKm),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-
-            // Chart
-            if (filtered.isNotEmpty)
-              _MiniChart(
-                activities: filtered,
-                distanceUnit: _distanceUnit,
-              )
-            else
-              const Card(
-                child: SizedBox(
-                  height: 120,
-                  child: Center(child: Text('No activities in this period')),
-                ),
-              ),
-            const SizedBox(height: 12),
-
-            // Grouped activity list
+            // Grouped infinite activity list
             Expanded(
               child: Card(
-                child: filtered.isEmpty
-                    ? const Center(child: Text('No activities found'))
-                    : ListView.builder(
-                        itemCount: groups.length,
-                        itemBuilder: (context, idx) {
-                          return _GroupCard(
-                            group: groups[idx],
-                            distanceUnit: _distanceUnit,
-                          );
-                        },
+                child: Column(
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(12, 10, 12, 6),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            flex: 4,
+                            child: Text(
+                              'Date',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              'Distance',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              'Pace',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                          SizedBox(
+                            width: 28,
+                            child: Text(
+                              ' ',
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
                       ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? const Center(child: Text('No activities found'))
+                          : ListView.builder(
+                              controller: _scrollController,
+                              itemCount: groups.length + (_loadingMore ? 1 : 0),
+                              itemBuilder: (context, idx) {
+                                if (idx >= groups.length) {
+                                  return const Padding(
+                                    padding: EdgeInsets.all(16.0),
+                                    child: Center(child: CircularProgressIndicator()),
+                                  );
+                                }
+                                return _GroupCard(
+                                  group: groups[idx],
+                                  distanceUnit: _distanceUnit,
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ],
@@ -771,27 +824,57 @@ class _GroupCard extends StatefulWidget {
 }
 
 class _GroupCardState extends State<_GroupCard> {
-  bool _expanded = true;
+  bool _expanded = false;
   static const double _kmToMiles = 0.621371;
 
   @override
   Widget build(BuildContext context) {
+    final rangeLabel = _groupDateRangeLabel();
+    final distanceLabel =
+        '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
+    final paceLabel = _formatPace(widget.group.averagePace);
+
     return Column(
       children: [
-        ListTile(
-          title: Text(
-            widget.group.label,
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          subtitle: Text(
-            '${widget.group.count} activities • ${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()} • ${_formatDuration(widget.group.totalDuration)}',
-            style: const TextStyle(fontSize: 12),
-          ),
-          trailing: Icon(
-            _expanded ? Icons.expand_less : Icons.expand_more,
-          ),
+        InkWell(
           onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+            child: Row(
+              children: [
+                Expanded(
+                  flex: 4,
+                  child: Text(
+                    '$rangeLabel (${widget.group.count})',
+                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    distanceLabel,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    paceLabel,
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                SizedBox(
+                  width: 28,
+                  child: Icon(
+                    _expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 18,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
+        const Divider(height: 1),
         if (_expanded)
           ListView.builder(
             shrinkWrap: true,
@@ -825,6 +908,22 @@ class _GroupCardState extends State<_GroupCard> {
           const Divider(),
       ],
     );
+  }
+
+  String _groupDateRangeLabel() {
+    if (widget.group.activities.isEmpty) {
+      return widget.group.label;
+    }
+
+    final dates = widget.group.activities.map((a) => a.dateTime).toList()..sort();
+    final start = dates.first;
+    final end = dates.last;
+    final sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
+
+    if (sameDay) {
+      return DateFormat('MMM d').format(start);
+    }
+    return '${DateFormat('MMM d').format(start)} - ${DateFormat('MMM d').format(end)}';
   }
 
   String _formatDuration(int seconds) {

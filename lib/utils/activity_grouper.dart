@@ -26,26 +26,23 @@ class ActivityGroup {
 
 /// Groups activities by timeframe (week, month, year).
 class ActivityGrouper {
-  /// Group activities by ISO week.
+  /// Group activities by calendar week (Sunday-Saturday).
   static List<ActivityGroup> groupByWeek(List<Activity> activities) {
     final groups = <String, List<Activity>>{};
 
     for (var activity in activities) {
       final date = activity.dateTime;
-      final weekNum = _getISOWeekNumber(date);
-      final year = date.year;
-      final key = '$weekNum-$year';
+      final startDate = _startOfWeek(date);
+      final key = DateFormat('yyyy-MM-dd').format(startDate);
       groups.putIfAbsent(key, () => []).add(activity);
     }
 
     return _sortGroups(groups, (key, activities) {
-      final parts = key.split('-');
-      final weekNum = int.parse(parts[0]);
-      final year = int.parse(parts[1]);
-      final startDate = _getDateFromISOWeek(year, weekNum);
+      final startDate = DateTime.parse(key);
       final endDate = startDate.add(const Duration(days: 6));
       return ActivityGroup(
-        label: 'Week $weekNum, $year (${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d').format(endDate)})',
+        label:
+            'Week ${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, yyyy').format(endDate)}',
         activities: activities,
         startDate: startDate,
       );
@@ -105,18 +102,9 @@ class ActivityGrouper {
       ..sort((a, b) => b.startDate.compareTo(a.startDate));
   }
 
-  /// Get ISO week number (1-53) for a date.
-  static int _getISOWeekNumber(DateTime date) {
-    int dayOfWeek = date.weekday;
-    int dayOfYear = date.difference(DateTime(date.year)).inDays + 1;
-    int weekNumber = ((dayOfYear - dayOfWeek + 10) / 7).floor();
-    return weekNumber;
-  }
-
-  /// Get the start date (Monday) of an ISO week.
-  static DateTime _getDateFromISOWeek(int year, int week) {
-    final jan4 = DateTime(year, 1, 4);
-    final startOfYear = jan4.subtract(Duration(days: jan4.weekday - 1));
-    return startOfYear.add(Duration(days: (week - 1) * 7));
+  /// Get the start date (Sunday) of a calendar week.
+  static DateTime _startOfWeek(DateTime date) {
+    final localDate = DateTime(date.year, date.month, date.day);
+    return localDate.subtract(Duration(days: localDate.weekday % 7));
   }
 }

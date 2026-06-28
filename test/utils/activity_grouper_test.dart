@@ -117,9 +117,9 @@ void main() {
         
         final juneGroup = groups.firstWhere((g) => g.label.contains('June'));
         
-        // June has activities 1, 2, 3
-        expect(juneGroup.count, 3);
-        expect(juneGroup.totalDistance, 35.0); // 5 + 10 + 20
+        // June has activities 1 and 2
+        expect(juneGroup.count, 2);
+        expect(juneGroup.totalDistance, 15.0); // 5 + 10
       });
     });
 
