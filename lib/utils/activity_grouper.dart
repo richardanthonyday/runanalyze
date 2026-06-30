@@ -42,7 +42,7 @@ class ActivityGrouper {
       final endDate = startDate.add(const Duration(days: 6));
       return ActivityGroup(
         label:
-            'Week ${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, yyyy').format(endDate)}',
+            '${DateFormat('MMM d').format(startDate)} - ${DateFormat('MMM d, yyyy').format(endDate)}',
         activities: activities,
         startDate: startDate,
       );

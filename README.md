@@ -4,6 +4,33 @@ This repository contains a minimal Flutter mobile app scaffold implementing a ba
 
 See /sdd/SPEC.md for the SDD specification used to drive development.
 
+## Wireless debugging (WSL)
+
+### On the phone
+
+1. Enable Developer options (Settings → About phone → tap Build number 7 times)
+2. Turn on **Wireless debugging**
+3. Tap **Wireless debugging** → **Pair device with pairing code**
+4. Keep that screen open — note the IP address, pair port, and ADB port shown
+
+### In WSL terminal
+
+```bash
+adb kill-server
+adb start-server
+adb pair <PHONE_IP>:<PAIR_PORT>   # enter pairing code when prompted
+adb connect <PHONE_IP>:<ADB_PORT> # use the port shown on the main Wireless debugging screen
+adb devices -l
+flutter devices
+flutter run -d <DEVICE_ID>
+```
+
+> **Note:** The pair port and connect port are different numbers. Use the pair port only for
+> `adb pair`, then use the separate ADB port shown on the main Wireless debugging screen for
+> `adb connect`.
+
+---
+
 ## Debug startup (API probe mode)
 
 You can launch directly into the API Probe screen for request/response diagnostics.

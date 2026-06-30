@@ -107,6 +107,14 @@ class ActivityService {
     _resetPageCache();
   }
 
+  /// The oldest date we have definitively fetched data past.
+  /// Null if no pages have been fetched yet.
+  DateTime? get oldestFetchedDate {
+    if (_cachedActivities == null || _cachedActivities!.isEmpty) return null;
+    if (_reachedLastPage) return DateTime(2000);
+    return _cachedActivities!.last.dateTime;
+  }
+
   bool _coversCutoff(DateTime? cutoff) {
     if (_cachedActivities == null || _cachedActivities!.isEmpty) {
       return false;

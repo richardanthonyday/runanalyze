@@ -671,10 +671,17 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _fullRefresh() async {
     setState(() {
+      _activities = [];
       _loadedNotBefore = null;
       _loadedPeriods = 1;
       _error = null;
+      _loadingMore = false;
+      _loading = true;
     });
+
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -709,7 +716,7 @@ class _DashboardPageState extends State<DashboardPage> {
   int _maxPeriodsFor(Timeframe timeframe) {
     if (timeframe == Timeframe.week) return 52;
     if (timeframe == Timeframe.month) return 24;
-    return 10;
+    return 1;
   }
 
   bool _hasMorePeriods() {
@@ -747,6 +754,12 @@ class _DashboardPageState extends State<DashboardPage> {
     final options = <String>{'All', ...sports};
     options.add('Running');
     return options.toList();
+  }
+
+  bool _isCoveredByFetch(DateTime periodStart) {
+    final oldest = _activityService.oldestFetchedDate;
+    if (oldest == null) return false;
+    return oldest.isBefore(periodStart) || oldest.isAtSameMomentAs(periodStart);
   }
 
   List<ActivityGroup> _getGroups() {
@@ -805,7 +818,7 @@ class _DashboardPageState extends State<DashboardPage> {
   String _periodLabel(DateTime start) {
     if (_timeframe == Timeframe.week) {
       final end = start.add(const Duration(days: 6));
-      return 'Week ${DateFormat('MMM d').format(start)} - ${DateFormat('MMM d, yyyy').format(end)}';
+      return '${DateFormat('MMM d').format(start)} - ${DateFormat('MMM d, yyyy').format(end)}';
     }
     if (_timeframe == Timeframe.month) {
       return DateFormat('MMMM yyyy').format(start);
@@ -1037,6 +1050,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                 return _GroupCard(
                                   group: groups[idx],
                                   distanceUnit: _distanceUnit,
+                                  dataComplete: _isCoveredByFetch(groups[idx].startDate),
                                 );
                               },
                             ),
@@ -1089,11 +1103,13 @@ class _DashboardPageState extends State<DashboardPage> {
 class _GroupCard extends StatefulWidget {
   final ActivityGroup group;
   final DistanceUnit distanceUnit;
+  final bool dataComplete;
 
   const _GroupCard({
     Key? key,
     required this.group,
     required this.distanceUnit,
+    this.dataComplete = false,
   }) : super(key: key);
 
   @override
@@ -1108,10 +1124,17 @@ class _GroupCardState extends State<_GroupCard> {
   Widget build(BuildContext context) {
     final rangeLabel = _groupDateRangeLabel();
     final isEmptyGroup = widget.group.activities.isEmpty;
-    final distanceLabel = isEmptyGroup
-      ? '0 ${_distanceLabel()}'
-      : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
-    final paceLabel = isEmptyGroup ? '0' : _formatPace(widget.group.averagePace);
+    final pending = isEmptyGroup && !widget.dataComplete;
+    final distanceLabel = pending
+        ? '—'
+        : isEmptyGroup
+            ? '0 ${_distanceLabel()}'
+            : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
+    final paceLabel = pending
+        ? '—'
+        : isEmptyGroup
+            ? '0'
+            : _formatPace(widget.group.averagePace);
 
     return Column(
       children: [
@@ -1124,30 +1147,48 @@ class _GroupCardState extends State<_GroupCard> {
                 Expanded(
                   flex: 4,
                   child: Text(
-                    '$rangeLabel (${widget.group.count})',
-                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    pending
+                        ? rangeLabel
+                        : '$rangeLabel (${widget.group.count})',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: pending ? Colors.grey : null,
+                    ),
                   ),
                 ),
                 Expanded(
                   flex: 3,
                   child: Text(
                     distanceLabel,
-                    style: const TextStyle(fontSize: 13),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: pending ? Colors.grey : null,
+                    ),
                   ),
                 ),
                 Expanded(
                   flex: 3,
                   child: Text(
                     paceLabel,
-                    style: const TextStyle(fontSize: 13),
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: pending ? Colors.grey : null,
+                    ),
                   ),
                 ),
                 SizedBox(
                   width: 28,
-                  child: Icon(
-                    _expanded ? Icons.expand_less : Icons.expand_more,
-                    size: 18,
-                  ),
+                  child: pending
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Icon(
+                          _expanded ? Icons.expand_less : Icons.expand_more,
+                          size: 18,
+                        ),
                 ),
               ],
             ),

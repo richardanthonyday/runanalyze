@@ -43,7 +43,7 @@ class RunalyzeClient {
         'page': page.toString(),
         'itemsPerPage': itemsPerPage.toString(),
         'pagination': 'true',
-        'order[id]': 'desc',
+        'order[date_time]': 'desc',
       },
     );
 
@@ -83,7 +83,7 @@ class RunalyzeClient {
         'page': page.toString(),
         'itemsPerPage': itemsPerPage.toString(),
         'pagination': 'true',
-        'order[id]': 'desc',
+        'order[date_time]': 'desc',
       },
     );
 
