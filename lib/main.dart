@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,6 +14,13 @@ const bool kApiProbeMode = bool.fromEnvironment(
   defaultValue: false,
 );
 
+// Dev-only: passed via --dart-define=RUNALYZE_API_TOKEN=...
+// Never commit a real token. Use a local .env.local file + run.sh instead.
+const String kDevApiToken = String.fromEnvironment(
+  'RUNALYZE_API_TOKEN',
+  defaultValue: '',
+);
+
 void main() {
   runApp(const RunAnalyzeApp());
 }
@@ -25,13 +33,14 @@ class RunAnalyzeApp extends StatelessWidget {
     return MaterialApp(
       title: 'RunAnalyze (Basic)',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: kApiProbeMode ? const ApiProbePage() : const DashboardPage(),
+      home: kApiProbeMode ? const ApiProbePage(apiToken: '') : const DashboardPage(),
     );
   }
 }
 
 class ApiProbePage extends StatefulWidget {
-  const ApiProbePage({Key? key}) : super(key: key);
+  final String apiToken;
+  const ApiProbePage({Key? key, required this.apiToken}) : super(key: key);
 
   @override
   State<ApiProbePage> createState() => _ApiProbePageState();
@@ -91,7 +100,7 @@ class _ApiProbePageState extends State<ApiProbePage> {
     });
 
     final client = RunalyzeClient(
-      apiToken: 'pt#fc0bc78894a497c647fc7208b08364fa',
+      apiToken: widget.apiToken,
     );
 
     final result = await client.probeActivityPage(
@@ -335,10 +344,12 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   static const String _recordsPerPageKey = 'records_per_page';
   static const String _distanceUnitKey = 'distance_unit';
+  static const String _apiTokenKey = 'api_token';
   Timeframe _timeframe = Timeframe.week;
   DistanceUnit _distanceUnit = DistanceUnit.km;
   String _sportFilter = 'Running';
   int _recordsPerPage = 10;
+  String _apiToken = '';
   late ActivityService _activityService;
   List<Activity> _activities = [];
   bool _loading = true;
@@ -354,12 +365,15 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
-    // TODO: Load API token from secure storage or environment
-    final apiToken = 'pt#fc0bc78894a497c647fc7208b08364fa';
-    final client = RunalyzeClient(apiToken: apiToken);
-    _activityService = ActivityService(client: client);
+    _activityService = ActivityService(client: RunalyzeClient(apiToken: ''));
     _scrollController.addListener(_onScroll);
     _initAndLoad();
+  }
+
+  void _rebuildClient() {
+    _activityService = ActivityService(
+      client: RunalyzeClient(apiToken: _apiToken),
+    );
   }
 
   @override
@@ -371,18 +385,43 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _initAndLoad() async {
     final savedRecords = await _loadRecordsPerPagePreference();
     final savedUnit = await _loadDistanceUnitPreference();
-    if ((savedRecords != null || savedUnit != null) && mounted) {
+    final savedToken = await _loadApiTokenPreference();
+    if (mounted) {
       setState(() {
-        if (savedRecords != null) {
-          _recordsPerPage = savedRecords;
-        }
-        if (savedUnit != null) {
-          _distanceUnit = savedUnit;
-        }
+        if (savedRecords != null) _recordsPerPage = savedRecords;
+        if (savedUnit != null) _distanceUnit = savedUnit;
+        if (savedToken != null) _apiToken = savedToken;
       });
     }
     if (!mounted) return;
+    // Seed from dart-define dev token if nothing is saved yet.
+    if (_apiToken.isEmpty && kDevApiToken.isNotEmpty) {
+      _apiToken = kDevApiToken;
+      await _saveApiTokenPreference(_apiToken);
+    }
+    if (_apiToken.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+    _rebuildClient();
     await _loadActivities(cutoff: _cutoffFor(Timeframe.week, periods: _loadedPeriods));
+  }
+
+  Future<String?> _loadApiTokenPreference() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final value = prefs.getString(_apiTokenKey);
+      return (value != null && value.isNotEmpty) ? value : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _saveApiTokenPreference(String value) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_apiTokenKey, value);
+    } catch (_) {}
   }
 
   Future<int?> _loadRecordsPerPagePreference() async {
@@ -428,9 +467,29 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  /// Normalise a pasted/typed token: strip Bearer prefix and whitespace,
+  /// and add pt# prefix if the user pasted a raw hash without it.
+  String _normaliseToken(String raw) {
+    var t = raw.trim();
+    // Strip 'Bearer ' prefix in case the user copied the full header value.
+    if (t.toLowerCase().startsWith('bearer ')) {
+      t = t.substring(7).trim();
+    }
+    // Add pt# prefix if the value looks like a raw hex hash without it.
+    // Runalyze tokens are pt# followed by a 32-char hex string.
+    if (!t.startsWith('pt#') && RegExp(r'^[0-9a-f]{32}$').hasMatch(t)) {
+      t = 'pt#$t';
+    }
+    return t;
+  }
+
   Future<void> _openSettingsDialog() async {
     DistanceUnit tempUnit = _distanceUnit;
     int tempRecordsPerPage = _recordsPerPage;
+    String tempApiToken = _apiToken;
+    final tokenController = TextEditingController(text: _apiToken);
+
+    var obscureToken = true;
 
     final action = await showDialog<String>(
       context: context,
@@ -499,6 +558,61 @@ class _DashboardPageState extends State<DashboardPage> {
                         setLocalState(() => tempRecordsPerPage = value);
                       },
                     ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Account',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 8),
+                    TextFormField(
+                      controller: tokenController,
+                      obscureText: obscureToken,
+                      decoration: InputDecoration(
+                        labelText: 'Runalyze API Token',
+                        helperText: tempApiToken.isNotEmpty
+                            ? 'Saved: ••••${tempApiToken.length > 6 ? tempApiToken.substring(tempApiToken.length - 6) : tempApiToken}'
+                            : 'Found in Runalyze account settings',
+                        isDense: true,
+                        border: const OutlineInputBorder(),
+                        suffixIcon: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: Icon(
+                                obscureToken ? Icons.visibility : Icons.visibility_off,
+                              ),
+                              tooltip: obscureToken ? 'Show token' : 'Hide token',
+                              onPressed: () =>
+                                  setLocalState(() => obscureToken = !obscureToken),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.paste),
+                              tooltip: 'Paste from clipboard',
+                              onPressed: () async {
+                                final data =
+                                    await Clipboard.getData(Clipboard.kTextPlain);
+                                final text = _normaliseToken(data?.text ?? '');
+                                if (text.isNotEmpty) {
+                                  tokenController.text = text;
+                                  setLocalState(() => tempApiToken = text);
+                                }
+                              },
+                            ),
+                            if (tempApiToken.isNotEmpty)
+                              IconButton(
+                                icon: const Icon(Icons.clear),
+                                tooltip: 'Clear token',
+                                onPressed: () {
+                                  tokenController.clear();
+                                  setLocalState(() => tempApiToken = '');
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+                      onChanged: (value) =>
+                          setLocalState(() => tempApiToken = value),
+                    ),
                     const SizedBox(height: 8),
                     Align(
                       alignment: Alignment.centerLeft,
@@ -531,7 +645,7 @@ class _DashboardPageState extends State<DashboardPage> {
       if (!mounted) return;
       Navigator.of(context).push(
         MaterialPageRoute<void>(
-          builder: (_) => const ApiProbePage(),
+          builder: (_) => ApiProbePage(apiToken: _apiToken),
         ),
       );
       return;
@@ -540,20 +654,27 @@ class _DashboardPageState extends State<DashboardPage> {
     if (action != 'apply') return;
 
     final pagingChanged = tempRecordsPerPage != _recordsPerPage;
+    final tokenChanged = _normaliseToken(tempApiToken) != _apiToken;
     setState(() {
       _distanceUnit = tempUnit;
       _recordsPerPage = tempRecordsPerPage;
-      if (pagingChanged) {
+      _apiToken = _normaliseToken(tempApiToken);
+      if (pagingChanged || tokenChanged) {
         _loadedNotBefore = null;
         _loadedPeriods = 1;
+        _activities = [];
       }
     });
 
     await _saveDistanceUnitPreference(tempUnit);
     await _saveRecordsPerPagePreference(tempRecordsPerPage);
+    await _saveApiTokenPreference(_apiToken);
 
-    if (pagingChanged) {
-      await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
+    if (tokenChanged || pagingChanged) {
+      _rebuildClient();
+      if (_apiToken.isNotEmpty) {
+        await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
+      }
     }
   }
 
@@ -832,6 +953,34 @@ class _DashboardPageState extends State<DashboardPage> {
       return Scaffold(
         appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
         body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    if (_apiToken.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.lock_outline, size: 64, color: Colors.grey),
+                const SizedBox(height: 16),
+                const Text(
+                  'Enter your Runalyze API token to get started.',
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  icon: const Icon(Icons.settings),
+                  label: const Text('Open Settings'),
+                  onPressed: _openSettingsDialog,
+                ),
+              ],
+            ),
+          ),
+        ),
       );
     }
 

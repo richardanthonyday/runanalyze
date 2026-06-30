@@ -4,6 +4,29 @@ This repository contains a minimal Flutter mobile app scaffold implementing a ba
 
 See /sdd/SPEC.md for the SDD specification used to drive development.
 
+## Local dev environment
+
+The app reads an API token from `SharedPreferences` on the device. For development you can seed it automatically without typing it on the phone:
+
+1. Create a local secrets file (gitignored):
+
+```bash
+echo 'RUNALYZE_API_TOKEN=pt#your_token_here' > .env.local
+```
+
+2. Use the dev run script which reads from that file:
+
+```bash
+./run.sh -d <DEVICE_ID>
+# e.g. ./run.sh -d 192.168.7.98:33633
+```
+
+The token is passed via `--dart-define=RUNALYZE_API_TOKEN=...` and is saved into `SharedPreferences` on first launch. Subsequent runs from any script reuse the saved value.
+
+> **Important:** `.env.local` is gitignored. Never commit a real token.
+
+---
+
 ## Wireless debugging (WSL)
 
 ### On the phone

@@ -11,3 +11,7 @@ build/
 *.iml
 **/android/**/build/
 **/ios/Pods/
+
+# Local dev secrets – never commit
+.env.local
+logs/
