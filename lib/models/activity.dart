@@ -78,6 +78,22 @@ class Activity {
     return (duration / 60) / distance;
   }
 
+  /// For 'Sets' or weight workouts, duration in seconds represents set count.
+  /// Return set count if this is a Sets workout with no distance recorded.
+  /// Checks for "sets" in either type or sport name (case-insensitive) and distance <= 0.
+  int? get setsCount {
+    final typeStr = type?.toLowerCase() ?? '';
+    final sportStr = sport.toLowerCase();
+    
+    // Check if this is a Sets workout (by type or sport name)
+    final isSetWorkout = typeStr.contains('sets') || sportStr.contains('sets');
+    
+    if (isSetWorkout && distance <= 0) {
+      return duration; // duration is stored in seconds = set count
+    }
+    return null;
+  }
+
   /// Format duration as human-readable string.
   String formatDuration() {
     final hours = duration ~/ 3600;

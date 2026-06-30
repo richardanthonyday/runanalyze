@@ -1274,16 +1274,30 @@ class _GroupCardState extends State<_GroupCard> {
     final rangeLabel = _groupDateRangeLabel();
     final isEmptyGroup = widget.group.activities.isEmpty;
     final pending = isEmptyGroup && !widget.dataComplete;
+
+    // For Sets workouts, calculate total from set count, not distance.
+    final hasSets =
+        widget.group.activities.any((a) => a.setsCount != null);
+    final totalSets = hasSets
+        ? widget.group.activities
+            .map((a) => a.setsCount ?? 0)
+            .fold<int>(0, (sum, s) => sum + s)
+        : null;
+
     final distanceLabel = pending
         ? '—'
-        : isEmptyGroup
-            ? '0 ${_distanceLabel()}'
-            : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
+        : totalSets != null
+            ? '${totalSets} ${totalSets == 1 ? 'set' : 'sets'}'
+            : isEmptyGroup
+                ? '0 ${_distanceLabel()}'
+                : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
     final paceLabel = pending
         ? '—'
-        : isEmptyGroup
-            ? '0'
-            : _formatPace(widget.group.averagePace);
+        : totalSets != null
+            ? '—'
+            : isEmptyGroup
+                ? '0'
+                : _formatPace(widget.group.averagePace);
 
     return Column(
       children: [
@@ -1351,13 +1365,15 @@ class _GroupCardState extends State<_GroupCard> {
             itemCount: widget.group.activities.length,
             itemBuilder: (context, idx) {
               final activity = widget.group.activities[idx];
+              final activityDistance = _formatActivityDistance(activity);
+              final activityPace = _formatActivityPace(activity);
               return Padding(
                 padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 4, bottom: 4),
                 child: Card(
                   child: ListTile(
                     dense: true,
                     title: Text(
-                      '${activity.sport}${activity.type != null ? ' • ${activity.type}' : ''} • ${_distanceForUnit(activity.distance).toStringAsFixed(1)} ${_distanceLabel()}',
+                      '${activity.sport}${activity.type != null ? ' • ${activity.type}' : ''} • $activityDistance',
                       style: const TextStyle(fontSize: 14),
                     ),
                     subtitle: Text(
@@ -1365,7 +1381,7 @@ class _GroupCardState extends State<_GroupCard> {
                       style: const TextStyle(fontSize: 11),
                     ),
                     trailing: Text(
-                      _formatPace(activity.paceMinPerKm),
+                      activityPace ?? '—',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ),
@@ -1414,6 +1430,23 @@ class _GroupCardState extends State<_GroupCard> {
     final seconds = totalSeconds % 60;
     final secondsPadded = seconds.toString().padLeft(2, '0');
     return '${minutes}:${secondsPadded} min/${_distanceLabel()}';
+  }
+
+  /// Format distance display: for Sets workouts, show set count; otherwise km/mi.
+  String _formatActivityDistance(Activity activity) {
+    final sets = activity.setsCount;
+    if (sets != null) {
+      return '${sets} ${sets == 1 ? 'set' : 'sets'}';
+    }
+    return '${_distanceForUnit(activity.distance).toStringAsFixed(1)} ${_distanceLabel()}';
+  }
+
+  /// Format pace display: skip for Sets workouts.
+  String? _formatActivityPace(Activity activity) {
+    if (activity.setsCount != null) {
+      return null; // No pace for Sets
+    }
+    return _formatPace(activity.paceMinPerKm);
   }
 }
 
