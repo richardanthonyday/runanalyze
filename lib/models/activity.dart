@@ -98,10 +98,8 @@ class Activity {
   String formatDuration() {
     final hours = duration ~/ 3600;
     final minutes = (duration % 3600) ~/ 60;
-    if (hours > 0) {
-      return '${hours}h ${minutes}m';
-    }
-    return '${minutes}m';
+    final seconds = duration % 60;
+    return '${hours.toString().padLeft(2, '0')}:${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 
   /// Format pace as string.

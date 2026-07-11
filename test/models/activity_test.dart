@@ -119,8 +119,8 @@ void main() {
     });
 
     group('formatDuration', () {
-      test('formats duration with hours and minutes', () {
-        expect(activity.formatDuration(), '23m');
+      test('formats duration as hh:mm:ss', () {
+        expect(activity.formatDuration(), '00:23:04');
       });
 
       test('formats duration with only minutes', () {
@@ -132,7 +132,7 @@ void main() {
           duration: 600, // 10 min
         );
 
-        expect(shortActivity.formatDuration(), '10m');
+        expect(shortActivity.formatDuration(), '00:10:00');
       });
 
       test('formats duration with hours', () {
@@ -144,7 +144,7 @@ void main() {
           duration: 5400, // 1h 30m
         );
 
-        expect(longActivity.formatDuration(), '1h 30m');
+        expect(longActivity.formatDuration(), '01:30:00');
       });
     });
 

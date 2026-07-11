@@ -345,6 +345,12 @@ class _DashboardPageState extends State<DashboardPage> {
   static const String _recordsPerPageKey = 'records_per_page';
   static const String _distanceUnitKey = 'distance_unit';
   static const String _apiTokenKey = 'api_token';
+  static const List<String> _manualSportOptions = [
+    'Running',
+    'Cycling',
+    'Sets',
+    'Walking',
+  ];
   Timeframe _timeframe = Timeframe.week;
   DistanceUnit _distanceUnit = DistanceUnit.km;
   String _sportFilter = 'Running';
@@ -676,6 +682,197 @@ class _DashboardPageState extends State<DashboardPage> {
         await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
       }
     }
+  }
+
+  Future<void> _openAddActivityDialog() async {
+    String selectedSport = 'Running';
+    final distanceController = TextEditingController();
+    final durationOrSetsController = TextEditingController();
+    final distanceUnitLabel = _distanceLabel();
+
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final isSets = selectedSport == 'Sets';
+            return AlertDialog(
+              title: const Text('Add Activity'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: selectedSport,
+                      decoration: const InputDecoration(
+                        labelText: 'Sport',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                      items: _manualSportOptions
+                          .map(
+                            (sport) => DropdownMenuItem<String>(
+                              value: sport,
+                              child: Text(sport),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value == null) return;
+                        setDialogState(() {
+                          selectedSport = value;
+                          if (selectedSport == 'Sets') {
+                            distanceController.text = '0';
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: distanceController,
+                      enabled: !isSets,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText: 'Distance ($distanceUnitLabel)',
+                        hintText: isSets
+                            ? 'Auto-set to 0 for Sets'
+                            : _distanceUnit == DistanceUnit.km
+                                ? 'e.g. 5.2'
+                                : 'e.g. 3.1',
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: durationOrSetsController,
+                      keyboardType: TextInputType.datetime,
+                      decoration: InputDecoration(
+                        labelText: isSets ? 'Sets' : 'Duration (hh:mm:ss)',
+                        hintText: isSets ? 'e.g. 12' : 'e.g. 01:30:00',
+                        border: const OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop('cancel'),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.of(context).pop('add'),
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (action != 'add' || !mounted) return;
+
+    final distance = selectedSport == 'Sets'
+      ? 0.0
+      : double.tryParse(distanceController.text.trim());
+    final durationOrSets = selectedSport == 'Sets'
+        ? int.tryParse(durationOrSetsController.text.trim())
+        : _parseDurationToSeconds(durationOrSetsController.text.trim());
+
+    if ((selectedSport != 'Sets' && (distance == null || distance < 0)) ||
+        durationOrSets == null ||
+        durationOrSets <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Enter valid values for distance and duration/sets.'),
+        ),
+      );
+      return;
+    }
+
+    final uploadDistance = selectedSport == 'Sets'
+      ? 0.0
+      : _distanceUnit == DistanceUnit.km
+        ? (distance ?? 0.0)
+        : (distance ?? 0.0) / _kmToMiles;
+
+    final newActivity = Activity(
+      id: -DateTime.now().millisecondsSinceEpoch,
+      dateTime: DateTime.now(),
+      sport: selectedSport,
+      type: null,
+      distance: uploadDistance,
+      duration: durationOrSets,
+      hrMax: null,
+      hrAvg: null,
+      power: null,
+      vo2Max: null,
+      temperature: null,
+      weather: null,
+      note: 'Added manually from app',
+    );
+
+    setState(() {
+      _activities = [newActivity, ..._activities]
+        ..sort((a, b) => b.dateTime.compareTo(a.dateTime));
+    });
+
+    try {
+      await _activityService.client.uploadManualActivity(
+        sport: selectedSport,
+        distanceKm: uploadDistance,
+        durationSeconds: durationOrSets,
+        startedAt: newActivity.dateTime,
+        note: 'Added manually from app',
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Activity uploaded to Runalyze. Processing may take a moment.'),
+        ),
+      );
+
+      await _loadActivities(
+        cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
+        forceRefresh: true,
+      );
+    } on RunalyzeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: ${e.message}')),
+      );
+    }
+  }
+
+  int? _parseDurationToSeconds(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+
+    if (!trimmed.contains(':')) {
+      return int.tryParse(trimmed);
+    }
+
+    final parts = trimmed.split(':');
+    if (parts.length < 2 || parts.length > 3) return null;
+
+    final parsed = parts.map((part) => int.tryParse(part)).toList();
+    if (parsed.any((value) => value == null)) return null;
+
+    if (parts.length == 2) {
+      final minutes = parsed[0] ?? 0;
+      final seconds = parsed[1] ?? 0;
+      return minutes * 60 + seconds;
+    }
+
+    final hours = parsed[0] ?? 0;
+    final minutes = parsed[1] ?? 0;
+    final seconds = parsed[2] ?? 0;
+    return hours * 3600 + minutes * 60 + seconds;
   }
 
   DateTime _cutoffFor(Timeframe timeframe, {int periods = 1}) {
@@ -1028,14 +1225,35 @@ class _DashboardPageState extends State<DashboardPage> {
       appBar: AppBar(
         title: const Text('RunAnalyze (Basic)'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _openSettingsDialog,
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: 'Full refresh',
-            onPressed: _fullRefresh,
+          PopupMenuButton<String>(
+            tooltip: 'Menu',
+            onSelected: (value) {
+              if (value == 'add') {
+                _openAddActivityDialog();
+                return;
+              }
+              if (value == 'settings') {
+                _openSettingsDialog();
+                return;
+              }
+              if (value == 'refresh') {
+                _fullRefresh();
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(
+                value: 'add',
+                child: Text('Add'),
+              ),
+              PopupMenuItem<String>(
+                value: 'settings',
+                child: Text('Settings'),
+              ),
+              PopupMenuItem<String>(
+                value: 'refresh',
+                child: Text('Full refresh'),
+              ),
+            ],
           ),
         ],
       ),
@@ -1290,7 +1508,7 @@ class _GroupCardState extends State<_GroupCard> {
             ? '${totalSets} ${totalSets == 1 ? 'set' : 'sets'}'
             : isEmptyGroup
                 ? '0 ${_distanceLabel()}'
-                : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(1)} ${_distanceLabel()}';
+                : '${_distanceForUnit(widget.group.totalDistance).toStringAsFixed(2)} ${_distanceLabel()}';
     final paceLabel = pending
         ? '—'
         : totalSets != null
@@ -1367,6 +1585,9 @@ class _GroupCardState extends State<_GroupCard> {
               final activity = widget.group.activities[idx];
               final activityDistance = _formatActivityDistance(activity);
               final activityPace = _formatActivityPace(activity);
+              final activityDurationLabel = activity.setsCount != null
+                  ? '${activity.setsCount} ${activity.setsCount == 1 ? 'set' : 'sets'}'
+                  : activity.formatDuration();
               return Padding(
                 padding: const EdgeInsets.only(left: 16.0, right: 16.0, top: 4, bottom: 4),
                 child: Card(
@@ -1377,7 +1598,7 @@ class _GroupCardState extends State<_GroupCard> {
                       style: const TextStyle(fontSize: 14),
                     ),
                     subtitle: Text(
-                      '${DateFormat('MMM d, EEE').format(activity.dateTime)} • ${activity.formatDuration()}',
+                      '${DateFormat('MMM d, EEE').format(activity.dateTime)} • $activityDurationLabel',
                       style: const TextStyle(fontSize: 11),
                     ),
                     trailing: Text(
@@ -1438,7 +1659,7 @@ class _GroupCardState extends State<_GroupCard> {
     if (sets != null) {
       return '${sets} ${sets == 1 ? 'set' : 'sets'}';
     }
-    return '${_distanceForUnit(activity.distance).toStringAsFixed(1)} ${_distanceLabel()}';
+    return '${_distanceForUnit(activity.distance).toStringAsFixed(2)} ${_distanceLabel()}';
   }
 
   /// Format pace display: skip for Sets workouts.

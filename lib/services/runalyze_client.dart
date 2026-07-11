@@ -121,6 +121,121 @@ class RunalyzeClient {
     }
   }
 
+  /// Upload a manually entered activity as a generated TCX file.
+  ///
+  /// Runalyze's public API currently supports activity creation via file upload.
+  Future<void> uploadManualActivity({
+    required String sport,
+    required double distanceKm,
+    required int durationSeconds,
+    DateTime? startedAt,
+    String? note,
+  }) async {
+    final started = startedAt ?? DateTime.now();
+    final tcx = _buildManualTcx(
+      sport: sport,
+      distanceKm: distanceKm,
+      durationSeconds: durationSeconds,
+      startedAt: started,
+      note: note,
+    );
+
+    final uri = Uri.parse('$baseUrl/activities/uploads');
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Accept'] = 'application/json'
+      ..headers['Authorization'] = 'Bearer $apiToken'
+      ..fields['title'] = '$sport ${DateTime.now().toIso8601String()}';
+
+    if (note != null && note.trim().isNotEmpty) {
+      request.fields['note'] = note.trim();
+    }
+
+    request.files.add(
+      http.MultipartFile.fromString(
+        'file',
+        tcx,
+        filename: 'manual_${started.millisecondsSinceEpoch}.tcx',
+      ),
+    );
+
+    http.StreamedResponse streamedResponse;
+    try {
+      streamedResponse = await request.send().timeout(const Duration(seconds: 20));
+    } catch (e) {
+      throw RunalyzeException('Network error while uploading activity: $e');
+    }
+
+    final response = await http.Response.fromStream(streamedResponse);
+
+    if (response.statusCode == 201 || response.statusCode == 202) {
+      return;
+    }
+
+    if (response.statusCode == 401) {
+      throw RunalyzeException('Authentication failed. Invalid or expired API token.');
+    }
+
+    if (response.statusCode == 429) {
+      throw RunalyzeException('Runalyze API rate limit reached. Please wait a minute and retry.');
+    }
+
+    throw RunalyzeException(
+      'Failed to upload activity: ${response.statusCode}${response.body.isNotEmpty ? ' - ${response.body}' : ''}',
+    );
+  }
+
+  String _buildManualTcx({
+    required String sport,
+    required double distanceKm,
+    required int durationSeconds,
+    required DateTime startedAt,
+    String? note,
+  }) {
+    final tcxSport = _toTcxSport(sport);
+    final startedUtc = startedAt.toUtc();
+    final idIso = startedUtc.toIso8601String();
+    final distanceMeters = (distanceKm * 1000).clamp(0, double.infinity);
+    final escapedNote = _escapeXml(note ?? 'Manual activity from RunAnalyze');
+
+    return '''<?xml version="1.0" encoding="UTF-8"?>
+<TrainingCenterDatabase xmlns="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2 http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd">
+  <Activities>
+    <Activity Sport="$tcxSport">
+      <Id>$idIso</Id>
+      <Lap StartTime="$idIso">
+        <TotalTimeSeconds>$durationSeconds</TotalTimeSeconds>
+        <DistanceMeters>$distanceMeters</DistanceMeters>
+        <Calories>0</Calories>
+        <Intensity>Active</Intensity>
+        <TriggerMethod>Manual</TriggerMethod>
+      </Lap>
+      <Notes>$escapedNote</Notes>
+    </Activity>
+  </Activities>
+</TrainingCenterDatabase>
+''';
+  }
+
+  String _toTcxSport(String sport) {
+    final value = sport.trim().toLowerCase();
+    if (value == 'running' || value == 'walking') {
+      return 'Running';
+    }
+    if (value == 'cycling') {
+      return 'Biking';
+    }
+    return 'Other';
+  }
+
+  String _escapeXml(String value) {
+    return value
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&apos;');
+  }
+
   /// Fetch activities from Runalyze API.
   ///
   /// Parameters:
