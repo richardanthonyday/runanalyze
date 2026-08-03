@@ -88,12 +88,14 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> _initAndLoad() async {
     final savedRecords = await _loadRecordsPerPagePreference();
     final savedUnit = await _loadDistanceUnitPreference();
-    final savedToken = await _loadApiTokenPreference();
     if (mounted) {
       setState(() {
-        if (savedRecords != null) _recordsPerPage = savedRecords;
+        if (savedRecords != null) {
+          _recordsPerPage = savedRecords;
+        } else {
+          _recordsPerPage = 50; // Ensure 50 if no preference stored
+        }
         if (savedUnit != null) _distanceUnit = savedUnit;
-        if (savedToken != null) _apiToken = savedToken;
       });
     }
     if (!mounted) return;
@@ -123,7 +125,7 @@ class _DashboardPageState extends State<DashboardPage> {
       final prefs = await SharedPreferences.getInstance();
       final value = prefs.getInt(_recordsPerPageKey);
       if (value == null) return null;
-      if (value != 10 && value != 25 && value != 50) return null;
+      if (value < 10 || value > 250) return null;
       return value;
     } catch (_) {
       return null;
