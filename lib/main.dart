@@ -10,11 +10,11 @@ import 'services/activity_service.dart';
 import 'utils/activity_grouper.dart';
 
 void main() {
-  runApp(const RunAnalyzeApp());
+  runApp(const RunSimpleApp());
 }
 
-class RunAnalyzeApp extends StatelessWidget {
-  const RunAnalyzeApp({Key? key}) : super(key: key);
+class RunSimpleApp extends StatelessWidget {
+  const RunSimpleApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
@@ -737,14 +737,14 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget build(BuildContext context) {
     if (_loading) {
       return Scaffold(
-        appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
+        appBar: AppBar(title: const Text('runSimple')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
 
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
+        appBar: AppBar(title: const Text('runSimple')),
         body: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -784,7 +784,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('RunAnalyze (Basic)'),
+        title: const Text('runSimple'),
         actions: [
           PopupMenuButton<String>(
             tooltip: 'Menu',

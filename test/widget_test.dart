@@ -1,11 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:runanalyze_mobile/main.dart';
+import 'package:runsimple_mobile/main.dart';
 
 void main() {
   testWidgets('app renders dashboard shell', (WidgetTester tester) async {
-    await tester.pumpWidget(const RunAnalyzeApp());
+    await tester.pumpWidget(const RunSimpleApp());
 
-    expect(find.text('RunAnalyze (Basic)'), findsOneWidget);
+    expect(find.text('runSimple'), findsOneWidget);
   });
 }

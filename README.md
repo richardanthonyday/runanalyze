@@ -1,12 +1,12 @@
-# runanalyze mobile
+# runSimple mobile
 
-This repository contains a minimal Flutter mobile app scaffold implementing a basic dashboard inspired by https://runalyze.com/dashboard. It is an SDD-driven starting point to view weekly, monthly, and annual activity statistics on an Android Pixel 10 (or emulator).
+This repository contains a minimal Flutter mobile app scaffold implementing a basic dashboard for **runSimple**. It is an SDD-driven starting point to view weekly, monthly, and annual activity statistics on an Android Pixel 10 (or physical phone/emulator).
 
 See /sdd/SPEC.md for the SDD specification used to drive development.
 
-## runSimple web backend (initial implementation)
+## runSimple web backend
 
-The repository now also includes an initial backend scaffold for the upcoming runSimple web platform:
+The repository includes the backend for the runSimple web and mobile platform:
 
 - Product direction: small Basic subset for casual runners (not a full Runalyze/Strava clone)
 - Core metrics focus: distance, duration, activity count, and week/month/year summaries

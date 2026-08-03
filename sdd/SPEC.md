@@ -1,4 +1,4 @@
-# SDD specification for RunAnalyze mobile
+# SDD specification for runSimple mobile
 
 This document captures the initial Software Design Description (SDD) for a small mobile app that mirrors the basic statistics dashboard from https://runalyze.com/dashboard.
 

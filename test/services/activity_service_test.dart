@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:runanalyze_mobile/models/activity.dart';
-import 'package:runanalyze_mobile/services/activity_service.dart';
-import 'package:runanalyze_mobile/services/backend_api_client.dart';
+import 'package:runsimple_mobile/models/activity.dart';
+import 'package:runsimple_mobile/services/activity_service.dart';
+import 'package:runsimple_mobile/services/backend_api_client.dart';
 import 'dart:convert';
 
 import 'mock_http_client.dart';
