@@ -5,21 +5,9 @@ import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
 import 'models/activity.dart';
-import 'services/runalyze_client.dart';
+import 'services/backend_api_client.dart';
 import 'services/activity_service.dart';
 import 'utils/activity_grouper.dart';
-
-const bool kApiProbeMode = bool.fromEnvironment(
-  'API_PROBE_MODE',
-  defaultValue: false,
-);
-
-// Dev-only: passed via --dart-define=RUNALYZE_API_TOKEN=...
-// Never commit a real token. Use a local .env.local file + run.sh instead.
-const String kDevApiToken = String.fromEnvironment(
-  'RUNALYZE_API_TOKEN',
-  defaultValue: '',
-);
 
 void main() {
   runApp(const RunAnalyzeApp());
@@ -31,302 +19,9 @@ class RunAnalyzeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RunAnalyze (Basic)',
+      title: 'runSimple (Mobile)',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: kApiProbeMode ? const ApiProbePage(apiToken: '') : const DashboardPage(),
-    );
-  }
-}
-
-class ApiProbePage extends StatefulWidget {
-  final String apiToken;
-  const ApiProbePage({Key? key, required this.apiToken}) : super(key: key);
-
-  @override
-  State<ApiProbePage> createState() => _ApiProbePageState();
-}
-
-class _ApiProbePageState extends State<ApiProbePage> {
-  bool _loading = true;
-  RunalyzeApiProbeResult? _result;
-  String _probeMode = 'latest';
-  int _probeItemsPerPage = 1;
-  int _probeWindowDays = 7;
-
-  void _dumpProbeToConsole() {
-    final result = _result;
-    if (result == null) return;
-
-    final weekly = _probeMode == 'week-first-page'
-      ? _windowFilteredFromFirstPage(result.responseBody)
-        : null;
-
-    final payload = {
-      'probe_mode': _probeMode,
-      'probe_items_per_page': _probeItemsPerPage,
-      'probe_window_days': _probeWindowDays,
-      'duration_ms': result.durationMs,
-      'status': result.statusCode,
-      'error': result.error,
-      'request_url': result.requestUrl,
-      'request_headers': result.requestHeaders,
-      'response_headers': result.responseHeaders,
-      'response_body': result.responseBody,
-      'window_filtered_from_first_page': weekly,
-    };
-
-    final pretty = const JsonEncoder.withIndent('  ').convert(payload);
-    debugPrint('=== RUNANALYZE_API_PROBE_START ===');
-    for (final line in pretty.split('\n')) {
-      debugPrint(line);
-    }
-    debugPrint('=== RUNANALYZE_API_PROBE_END ===');
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Probe dumped to Flutter console output')),
-    );
-  }
-
-  @override
-  void initState() {
-    super.initState();
-    _runProbe();
-  }
-
-  Future<void> _runProbe() async {
-    setState(() {
-      _loading = true;
-      _result = null;
-    });
-
-    final client = RunalyzeClient(
-      apiToken: widget.apiToken,
-    );
-
-    final result = await client.probeActivityPage(
-      page: 1,
-      itemsPerPage: _probeItemsPerPage,
-    );
-
-    setState(() {
-      _loading = false;
-      _result = result;
-    });
-  }
-
-  Map<String, dynamic>? _windowFilteredFromFirstPage(String? body) {
-    if (body == null || body.isEmpty) return null;
-    final decoded = jsonDecode(body);
-    if (decoded is! List) return null;
-
-    final now = DateTime.now();
-    final windowStart = DateTime(now.year, now.month, now.day)
-        .subtract(Duration(days: _probeWindowDays - 1));
-
-    final weekly = decoded.whereType<Map>().where((item) {
-      final dtRaw = item['date_time'];
-      if (dtRaw is! String) return false;
-      final dt = DateTime.tryParse(dtRaw)?.toLocal();
-      if (dt == null) return false;
-      return !dt.isBefore(windowStart);
-    }).toList();
-
-    final totalKm = weekly.fold<double>(
-      0,
-      (sum, item) => sum + ((item['distance'] as num?)?.toDouble() ?? 0.0),
-    );
-
-    return {
-      'window_days': _probeWindowDays,
-      'window_start_local': windowStart.toIso8601String(),
-      'first_page_count': decoded.length,
-      'window_count_from_first_page': weekly.length,
-      'window_total_distance_km_from_first_page': totalKm,
-      'activities': weekly,
-    };
-  }
-
-  String _formatPretty(String? body) {
-    if (body == null || body.isEmpty) return '(empty)';
-    try {
-      final decoded = jsonDecode(body);
-      return const JsonEncoder.withIndent('  ').convert(decoded);
-    } catch (_) {
-      return body;
-    }
-  }
-
-  void _backToApp() {
-    if (Navigator.of(context).canPop()) {
-      Navigator.of(context).pop();
-      return;
-    }
-
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => const DashboardPage(),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('API Probe'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.home),
-            tooltip: 'Back to app',
-            onPressed: _backToApp,
-          ),
-          IconButton(
-            icon: const Icon(Icons.terminal),
-            tooltip: 'Dump probe to console',
-            onPressed: _loading ? null : _dumpProbeToConsole,
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.tune),
-            onSelected: (value) {
-              setState(() {
-                if (value.startsWith('mode:')) {
-                  _probeMode = value.substring(5);
-                  if (_probeMode == 'week-first-page' && _probeItemsPerPage == 1) {
-                    _probeItemsPerPage = 100;
-                  }
-                } else if (value.startsWith('size:')) {
-                  _probeItemsPerPage = int.tryParse(value.substring(5)) ?? _probeItemsPerPage;
-                } else if (value.startsWith('window:')) {
-                  _probeWindowDays = int.tryParse(value.substring(7)) ?? _probeWindowDays;
-                }
-              });
-              _runProbe();
-            },
-            itemBuilder: (context) => const [
-              PopupMenuItem(
-                value: 'mode:latest',
-                child: Text('Mode: Latest payload'),
-              ),
-              PopupMenuItem(
-                value: 'mode:week-first-page',
-                child: Text('Mode: Window-filter from first page'),
-              ),
-              PopupMenuDivider(),
-              PopupMenuItem(
-                value: 'size:1',
-                child: Text('Size: 1 record'),
-              ),
-              PopupMenuItem(
-                value: 'size:25',
-                child: Text('Size: 25 records'),
-              ),
-              PopupMenuItem(
-                value: 'size:50',
-                child: Text('Size: 50 records'),
-              ),
-              PopupMenuItem(
-                value: 'size:100',
-                child: Text('Size: 100 records'),
-              ),
-              PopupMenuItem(
-                value: 'size:500',
-                child: Text('Size: 500 records'),
-              ),
-              PopupMenuItem(
-                value: 'size:1000',
-                child: Text('Size: 1000 records'),
-              ),
-              PopupMenuDivider(),
-              PopupMenuItem(
-                value: 'window:7',
-                child: Text('Window: last 7 days'),
-              ),
-              PopupMenuItem(
-                value: 'window:14',
-                child: Text('Window: last 14 days'),
-              ),
-            ],
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _runProbe,
-          ),
-        ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : Padding(
-              padding: const EdgeInsets.all(12),
-              child: _result == null
-                  ? const Text('No probe result available.')
-                  : SingleChildScrollView(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Probe mode: $_probeMode'),
-                          Text('Probe itemsPerPage: $_probeItemsPerPage'),
-                          Text('Probe window days: $_probeWindowDays'),
-                          Text('Duration: ${_result!.durationMs} ms'),
-                          Text('Status: ${_result!.statusCode ?? 'no response'}'),
-                          if (_result!.error != null)
-                            Text(
-                              'Error: ${_result!.error}',
-                              style: const TextStyle(color: Colors.red),
-                            ),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Request URL',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          SelectableText(_result!.requestUrl),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Request Headers',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          SelectableText(const JsonEncoder.withIndent('  ')
-                              .convert(_result!.requestHeaders)),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Response Headers',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          SelectableText(const JsonEncoder.withIndent('  ')
-                              .convert(_result!.responseHeaders)),
-                          const SizedBox(height: 12),
-                          const Text(
-                            'Response Body',
-                            style: TextStyle(fontWeight: FontWeight.bold),
-                          ),
-                          SelectableText(_formatPretty(_result!.responseBody)),
-                          if (_probeMode == 'week-first-page') ...[
-                            const SizedBox(height: 12),
-                            Text(
-                              'Window Filtered Result (Last $_probeWindowDays Days, From First Page)',
-                              style: const TextStyle(fontWeight: FontWeight.bold),
-                            ),
-                            SelectableText(
-                              _formatPretty(
-                                jsonEncode(
-                                  _windowFilteredFromFirstPage(
-                                        _result!.responseBody,
-                                      ) ??
-                                      {
-                                        'error': 'Could not parse response as a JSON list',
-                                      },
-                                ),
-                              ),
-                            ),
-                          ],
-                          const SizedBox(height: 16),
-                          ElevatedButton(
-                            onPressed: _backToApp,
-                            child: const Text('Back to App'),
-                          ),
-                        ],
-                      ),
-                    ),
-            ),
+      home: const DashboardPage(),
     );
   }
 }
@@ -354,7 +49,7 @@ class _DashboardPageState extends State<DashboardPage> {
   Timeframe _timeframe = Timeframe.week;
   DistanceUnit _distanceUnit = DistanceUnit.km;
   String _sportFilter = 'Running';
-  int _recordsPerPage = 10;
+  int _recordsPerPage = 50;
   String _apiToken = '';
   late ActivityService _activityService;
   List<Activity> _activities = [];
@@ -371,14 +66,16 @@ class _DashboardPageState extends State<DashboardPage> {
   @override
   void initState() {
     super.initState();
-    _activityService = ActivityService(client: RunalyzeClient(apiToken: ''));
+    _activityService = ActivityService(
+      backendClient: BackendApiClient(),
+    );
     _scrollController.addListener(_onScroll);
     _initAndLoad();
   }
 
   void _rebuildClient() {
     _activityService = ActivityService(
-      client: RunalyzeClient(apiToken: _apiToken),
+      backendClient: BackendApiClient(),
     );
   }
 
@@ -400,15 +97,6 @@ class _DashboardPageState extends State<DashboardPage> {
       });
     }
     if (!mounted) return;
-    // Seed from dart-define dev token if nothing is saved yet.
-    if (_apiToken.isEmpty && kDevApiToken.isNotEmpty) {
-      _apiToken = kDevApiToken;
-      await _saveApiTokenPreference(_apiToken);
-    }
-    if (_apiToken.isEmpty) {
-      setState(() => _loading = false);
-      return;
-    }
     _rebuildClient();
     await _loadActivities(cutoff: _cutoffFor(Timeframe.week, periods: _loadedPeriods));
   }
@@ -543,83 +231,6 @@ class _DashboardPageState extends State<DashboardPage> {
                       style: TextStyle(fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
-                    DropdownButtonFormField<int>(
-                      value: tempRecordsPerPage,
-                      decoration: const InputDecoration(
-                        labelText: 'API Paging',
-                        helperText: 'Records per API page request',
-                        isDense: true,
-                        border: OutlineInputBorder(),
-                      ),
-                      items: const [10, 25, 50]
-                          .map(
-                            (size) => DropdownMenuItem<int>(
-                              value: size,
-                              child: Text('$size records'),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) {
-                        if (value == null) return;
-                        setLocalState(() => tempRecordsPerPage = value);
-                      },
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Account',
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    TextFormField(
-                      controller: tokenController,
-                      obscureText: obscureToken,
-                      decoration: InputDecoration(
-                        labelText: 'Runalyze API Token',
-                        helperText: tempApiToken.isNotEmpty
-                            ? 'Saved: ••••${tempApiToken.length > 6 ? tempApiToken.substring(tempApiToken.length - 6) : tempApiToken}'
-                            : 'Found in Runalyze account settings',
-                        isDense: true,
-                        border: const OutlineInputBorder(),
-                        suffixIcon: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              icon: Icon(
-                                obscureToken ? Icons.visibility : Icons.visibility_off,
-                              ),
-                              tooltip: obscureToken ? 'Show token' : 'Hide token',
-                              onPressed: () =>
-                                  setLocalState(() => obscureToken = !obscureToken),
-                            ),
-                            IconButton(
-                              icon: const Icon(Icons.paste),
-                              tooltip: 'Paste from clipboard',
-                              onPressed: () async {
-                                final data =
-                                    await Clipboard.getData(Clipboard.kTextPlain);
-                                final text = _normaliseToken(data?.text ?? '');
-                                if (text.isNotEmpty) {
-                                  tokenController.text = text;
-                                  setLocalState(() => tempApiToken = text);
-                                }
-                              },
-                            ),
-                            if (tempApiToken.isNotEmpty)
-                              IconButton(
-                                icon: const Icon(Icons.clear),
-                                tooltip: 'Clear token',
-                                onPressed: () {
-                                  tokenController.clear();
-                                  setLocalState(() => tempApiToken = '');
-                                },
-                              ),
-                          ],
-                        ),
-                      ),
-                      onChanged: (value) =>
-                          setLocalState(() => tempApiToken = value),
-                    ),
-                    const SizedBox(height: 8),
                     Align(
                       alignment: Alignment.centerLeft,
                       child: TextButton.icon(
@@ -647,16 +258,6 @@ class _DashboardPageState extends State<DashboardPage> {
       },
     );
 
-    if (action == 'probe') {
-      if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute<void>(
-          builder: (_) => ApiProbePage(apiToken: _apiToken),
-        ),
-      );
-      return;
-    }
-
     if (action != 'apply') return;
 
     final pagingChanged = tempRecordsPerPage != _recordsPerPage;
@@ -676,11 +277,9 @@ class _DashboardPageState extends State<DashboardPage> {
     await _saveRecordsPerPagePreference(tempRecordsPerPage);
     await _saveApiTokenPreference(_apiToken);
 
-    if (tokenChanged || pagingChanged) {
+    if (pagingChanged) {
       _rebuildClient();
-      if (_apiToken.isNotEmpty) {
-        await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
-      }
+      await _loadActivities(cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods));
     }
   }
 
@@ -822,18 +421,10 @@ class _DashboardPageState extends State<DashboardPage> {
     });
 
     try {
-      await _activityService.client.uploadManualActivity(
-        sport: selectedSport,
-        distanceKm: uploadDistance,
-        durationSeconds: durationOrSets,
-        startedAt: newActivity.dateTime,
-        note: 'Added manually from app',
-      );
-
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Activity uploaded to Runalyze. Processing may take a moment.'),
+          content: Text('Activity saved.'),
         ),
       );
 
@@ -841,10 +432,10 @@ class _DashboardPageState extends State<DashboardPage> {
         cutoff: _cutoffFor(_timeframe, periods: _loadedPeriods),
         forceRefresh: true,
       );
-    } on RunalyzeException catch (e) {
+    } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: ${e.message}')),
+        SnackBar(content: Text('Save failed: $e')),
       );
     }
   }
@@ -919,7 +510,7 @@ class _DashboardPageState extends State<DashboardPage> {
           .timeout(
         _timeoutForCutoff(cutoff),
         onTimeout: () {
-          throw RunalyzeException(
+          throw Exception(
             'Refreshing activities took too long. Please wait a minute and retry.',
           );
         },
@@ -933,9 +524,9 @@ class _DashboardPageState extends State<DashboardPage> {
         _loading = false;
         _loadingMore = false;
       });
-    } on RunalyzeException catch (e) {
+    } catch (e) {
       setState(() {
-        _error = e.message;
+        _error = e.toString();
         _loading = false;
         _loadingMore = false;
       });
@@ -1075,9 +666,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   bool _isCoveredByFetch(DateTime periodStart) {
-    final oldest = _activityService.oldestFetchedDate;
-    if (oldest == null) return false;
-    return oldest.isBefore(periodStart) || oldest.isAtSameMomentAs(periodStart);
+    return true;
   }
 
   List<ActivityGroup> _getGroups() {
@@ -1150,34 +739,6 @@ class _DashboardPageState extends State<DashboardPage> {
       return Scaffold(
         appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
         body: const Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    if (_apiToken.isEmpty) {
-      return Scaffold(
-        appBar: AppBar(title: const Text('RunAnalyze (Basic)')),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.lock_outline, size: 64, color: Colors.grey),
-                const SizedBox(height: 16),
-                const Text(
-                  'Enter your Runalyze API token to get started.',
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  icon: const Icon(Icons.settings),
-                  label: const Text('Open Settings'),
-                  onPressed: _openSettingsDialog,
-                ),
-              ],
-            ),
-          ),
-        ),
       );
     }
 

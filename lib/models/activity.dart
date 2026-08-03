@@ -72,6 +72,49 @@ class Activity {
     );
   }
 
+  /// Parse Activity from FastAPI backend JSON response schema.
+  factory Activity.fromBackendJson(Map<String, dynamic> json) {
+    int toInt(dynamic value) {
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse(value?.toString() ?? '0') ?? 0;
+    }
+
+    double toDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse(value?.toString() ?? '0.0') ?? 0.0;
+    }
+
+    final distanceMeters = toDouble(json['distance_m']);
+    final distanceKm = distanceMeters / 1000.0;
+    final movingTimeSeconds = toInt(json['moving_time_s']);
+    final dtStr = json['started_at_utc'] as String? ?? DateTime.now().toIso8601String();
+
+    final titleVal = json['title'];
+    final noteStr = titleVal is String ? titleVal : (titleVal is Map ? titleVal.toString() : null);
+
+    // Normalize Strava sport names ('Run' -> 'Running', 'Ride' -> 'Cycling', 'Walk' -> 'Walking')
+    final rawSport = json['sport'] as String? ?? 'Running';
+    String normalizedSport = rawSport;
+    if (rawSport == 'Run') {
+      normalizedSport = 'Running';
+    } else if (rawSport == 'Ride') {
+      normalizedSport = 'Cycling';
+    } else if (rawSport == 'Walk') {
+      normalizedSport = 'Walking';
+    }
+
+    return Activity(
+      id: toInt(json['id']),
+      dateTime: DateTime.parse(dtStr).toLocal(),
+      sport: normalizedSport,
+      type: json['source'] as String?,
+      distance: distanceKm,
+      duration: movingTimeSeconds,
+      note: noteStr,
+    );
+  }
+
   /// Get average pace in min/km.
   double get paceMinPerKm {
     if (distance <= 0) return 0;

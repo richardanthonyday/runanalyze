@@ -1,8 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:runanalyze_mobile/models/activity.dart';
 import 'package:runanalyze_mobile/services/activity_service.dart';
-import 'package:runanalyze_mobile/services/runalyze_client.dart';
-import 'package:http/http.dart' as http;
+import 'package:runanalyze_mobile/services/backend_api_client.dart';
 import 'dart:convert';
 
 import 'mock_http_client.dart';
@@ -14,11 +13,11 @@ void main() {
 
     setUp(() {
       mockHttpClient = MockHttpClient();
-      final client = RunalyzeClient(
-        apiToken: 'test-token',
+      final backendClient = BackendApiClient(
+        baseUrl: 'http://localhost:8000',
         httpClient: mockHttpClient,
       );
-      activityService = ActivityService(client: client);
+      activityService = ActivityService(backendClient: backendClient);
     });
 
     group('getActivities', () {
@@ -26,11 +25,11 @@ void main() {
         final mockActivities = [
           {
             'id': 1,
-            'date_time': '2026-06-26T19:28:14-05:00',
-            'sport': {'name': 'Running'},
-            'type': {'name': 'Easy run'},
-            'distance': 5.0,
-            'duration': 1800,
+            'started_at_utc': '2026-06-26T19:28:14Z',
+            'sport': 'Running',
+            'source': 'strava',
+            'distance_m': 5000.0,
+            'moving_time_s': 1800,
           },
         ];
         
@@ -51,10 +50,11 @@ void main() {
         final mockActivities = [
           {
             'id': 1,
-            'date_time': '2026-06-26T19:28:14-05:00',
-            'sport': {'name': 'Running'},
-            'distance': 5.0,
-            'duration': 1800,
+            'started_at_utc': '2026-06-26T19:28:14Z',
+            'sport': 'Running',
+            'source': 'strava',
+            'distance_m': 5000.0,
+            'moving_time_s': 1800,
           },
         ];
         
@@ -79,10 +79,11 @@ void main() {
         final mockActivities = [
           {
             'id': 1,
-            'date_time': '2026-06-26T19:28:14-05:00',
-            'sport': {'name': 'Running'},
-            'distance': 5.0,
-            'duration': 1800,
+            'started_at_utc': '2026-06-26T19:28:14Z',
+            'sport': 'Running',
+            'source': 'strava',
+            'distance_m': 5000.0,
+            'moving_time_s': 1800,
           },
         ];
         
@@ -106,10 +107,11 @@ void main() {
         final mockActivities = [
           {
             'id': 1,
-            'date_time': '2026-06-26T19:28:14-05:00',
-            'sport': {'name': 'Running'},
-            'distance': 5.0,
-            'duration': 1800,
+            'started_at_utc': '2026-06-26T19:28:14Z',
+            'sport': 'Running',
+            'source': 'strava',
+            'distance_m': 5000.0,
+            'moving_time_s': 1800,
           },
         ];
         
@@ -133,10 +135,11 @@ void main() {
         final mockActivities = [
           {
             'id': 1,
-            'date_time': '2026-06-26T19:28:14-05:00',
-            'sport': {'name': 'Running'},
-            'distance': 5.0,
-            'duration': 1800,
+            'started_at_utc': '2026-06-26T19:28:14Z',
+            'sport': 'Running',
+            'source': 'strava',
+            'distance_m': 5000.0,
+            'moving_time_s': 1800,
           },
         ];
 
@@ -150,7 +153,7 @@ void main() {
 
         expect(
           () => activityService.getActivities(forceRefresh: true),
-          throwsA(isA<RunalyzeException>()),
+          throwsA(isA<BackendApiException>()),
         );
       });
     });
@@ -273,10 +276,11 @@ void main() {
         final mockActivities = [
           {
             'id': 1,
-            'date_time': '2026-06-26T19:28:14-05:00',
-            'sport': {'name': 'Running'},
-            'distance': 5.0,
-            'duration': 1800,
+            'started_at_utc': '2026-06-26T19:28:14Z',
+            'sport': 'Running',
+            'source': 'strava',
+            'distance_m': 5000.0,
+            'moving_time_s': 1800,
           },
         ];
         
@@ -295,10 +299,11 @@ void main() {
         final newActivities = [
           {
             'id': 2,
-            'date_time': '2026-06-27T19:28:14-05:00',
-            'sport': {'name': 'Cycling'},
-            'distance': 20.0,
-            'duration': 3600,
+            'started_at_utc': '2026-06-27T19:28:14Z',
+            'sport': 'Cycling',
+            'source': 'strava',
+            'distance_m': 20000.0,
+            'moving_time_s': 3600,
           },
         ];
         mockHttpClient.setResponse(

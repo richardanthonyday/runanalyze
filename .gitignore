@@ -14,4 +14,14 @@ build/
 
 # Local dev secrets – never commit
 .env.local
+.env
+*.env
+backend/.env
+backend/.env.local
 logs/
+
+# Python backend artifacts
+backend/.venv/
+backend/__pycache__/
+backend/**/*.pyc
+backend/**/__pycache__/
